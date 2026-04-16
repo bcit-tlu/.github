@@ -1,2 +1,3 @@
-# .github
-Org reusable components and profiles
+# Reusable components and profiles
+
+Actions, components, and descriptions for the `bcit-tlu` organization.
