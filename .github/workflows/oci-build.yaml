@@ -196,7 +196,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.version.outputs.next }}-rc.${{ steps.version.outputs.short }}
+            org.opencontainers.image.version=${{ steps.version.outputs.next }}-rc.${{ steps.version.outputs.ts }}.${{ steps.version.outputs.short }}
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}:sha-${{ github.sha }}
             ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}:${{ steps.version.outputs.next }}-rc.${{ steps.version.outputs.ts }}.${{ steps.version.outputs.short }}
