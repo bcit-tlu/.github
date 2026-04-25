@@ -84,6 +84,9 @@ jobs:
       - name: Detect changes
         id: changes
         shell: bash
+        env:
+          INPUT_CONTEXT: ${{ inputs.context }}
+          INPUT_EXTRA_WATCH: ${{ inputs.extra_watch_paths }}
         run: |
           set -euo pipefail
 
@@ -109,7 +112,7 @@ jobs:
             fi
           fi
 
-          if git diff --quiet "${BASE}" "${HEAD}" -- ${{ inputs.context }} ${{ inputs.extra_watch_paths }}; then
+          if git diff --quiet "${BASE}" "${HEAD}" -- ${INPUT_CONTEXT} ${INPUT_EXTRA_WATCH}; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -130,12 +133,16 @@ jobs:
         id: version
         if: steps.changes.outputs.changed == 'true'
         shell: bash
+        env:
+          INPUT_TAG_PREFIX: ${{ inputs.tag_prefix }}
+          INPUT_COMPONENT: ${{ inputs.component }}
+          INPUT_CONTEXT: ${{ inputs.context }}
         run: |
           set -euo pipefail
 
-          PREFIX="${{ inputs.tag_prefix }}"
+          PREFIX="${INPUT_TAG_PREFIX}"
           if [[ -z "$PREFIX" ]]; then
-            PREFIX="${{ inputs.component }}-v"
+            PREFIX="${INPUT_COMPONENT}-v"
           fi
 
           TAG=$(git describe --tags \
@@ -158,8 +165,8 @@ jobs:
           MINOR="${BASH_REMATCH[2]}"
           PATCH="${BASH_REMATCH[3]}"
 
-          SUBJECTS=$(git log "${RANGE}" --pretty=format:"%s" -- ${{ inputs.context }})
-          BODIES=$(git log "${RANGE}" --pretty=format:"%b" -- ${{ inputs.context }})
+          SUBJECTS=$(git log "${RANGE}" --pretty=format:"%s" -- ${INPUT_CONTEXT})
+          BODIES=$(git log "${RANGE}" --pretty=format:"%b" -- ${INPUT_CONTEXT})
 
           if echo "$SUBJECTS" | grep -qE "^[a-zA-Z]+(\([^)]+\))?!:" \
              || echo "$BODIES" | grep -qE "^BREAKING[ -]CHANGE:"; then
@@ -207,9 +214,11 @@ jobs:
 
       - name: Sign image
         if: steps.changes.outputs.changed == 'true' && github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}
+          DIGEST: ${{ steps.build-push.outputs.digest }}
         run: |
-          cosign sign --yes \
-            ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}@${{ steps.build-push.outputs.digest }}
+          cosign sign --yes "${IMAGE}@${DIGEST}"
 
       # ── Trivy vulnerability scan ─────────────────────────────
       #
@@ -223,11 +232,14 @@ jobs:
         id: scan-ref
         if: steps.changes.outputs.changed == 'true'
         shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}
+          DIGEST: ${{ steps.build-push.outputs.digest }}
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${IMAGE}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
-            echo "ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}@${{ steps.build-push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Scan image (PR)
