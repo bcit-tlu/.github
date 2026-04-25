@@ -74,6 +74,7 @@ jobs:
       packages: write
       id-token: write            # Cosign keyless (Sigstore OIDC)
       security-events: write     # Trivy SARIF upload
+      actions: read              # Required by codeql-action/upload-sarif on private repos
 
     steps:
       - uses: actions/checkout@v6
