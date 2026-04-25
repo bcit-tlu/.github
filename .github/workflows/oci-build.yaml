@@ -270,6 +270,7 @@ jobs:
       - name: Upload scan results to GitHub Security
         if: steps.changes.outputs.changed == 'true' && github.event_name != 'pull_request'
         uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true  # Graceful fallback when Code Security is not enabled (private repos)
         with:
           sarif_file: trivy-${{ inputs.component }}.sarif
           category: trivy-${{ inputs.component }}
