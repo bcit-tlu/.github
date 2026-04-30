@@ -59,6 +59,13 @@ on:
         description: "Path to a .trivyignore file (relative to repo root)."
         type: string
         default: ""
+    outputs:
+      rc_version:
+        description: "Full RC version string (e.g. 1.2.3-rc.20260414194220.b286051). Empty when no changes detected."
+        value: ${{ jobs.build.outputs.rc_version }}
+      changed:
+        description: "Whether changes were detected in the component's build context."
+        value: ${{ jobs.build.outputs.changed }}
 
 env:
   REGISTRY: ghcr.io
@@ -67,6 +74,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      rc_version: ${{ steps.version.outputs.rc_version }}
+      changed: ${{ steps.changes.outputs.changed }}
 
     # Minimum permissions the workflow needs.  The *caller* must grant
     # at least these on the calling job for them to take effect.
@@ -187,6 +197,7 @@ jobs:
           echo "next=${NEXT}" >> "$GITHUB_OUTPUT"
           echo "short=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "ts=${TS}" >> "$GITHUB_OUTPUT"
+          echo "rc_version=${NEXT}-rc.${TS}.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         id: build-push
