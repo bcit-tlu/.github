@@ -59,6 +59,22 @@ on:
         description: "Path to a .trivyignore file (relative to repo root)."
         type: string
         default: ""
+      build_args:
+        description: |
+          Additional Docker build-args (newline-separated KEY=VALUE).
+
+          Intentionally NOT auto-populated with APP_VERSION / VITE_APP_VERSION:
+          `release-retag.yaml` promotes a release by re-aliasing the rc
+          image's digest as `vX.Y.Z` / `latest` without rebuilding, so a
+          build-time-baked version would survive into production images
+          and display the original `-rc.<short>` string forever. Surface
+          the version at deploy time via the Helm chart's APP_VERSION env
+          var instead (see `hriv` for the canonical pattern). The
+          `rc_version` output is still exposed on this workflow for
+          callers that need it for non-display purposes (chart packaging,
+          labels, etc.).
+        type: string
+        default: ""
     outputs:
       rc_version:
         description: "Full RC version string (e.g. 1.2.3-rc.20260414194220.b286051). Empty when no changes detected."
@@ -207,6 +223,7 @@ jobs:
           context: ${{ inputs.context }}
           target: ${{ inputs.target || '' }}
           build-contexts: ${{ inputs.build_contexts || '' }}
+          build-args: ${{ inputs.build_args || '' }}
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           provenance: false
