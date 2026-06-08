@@ -1,7 +1,7 @@
 # Reusable workflow: build, sign, and scan an OCI container image.
 #
 # Designed for monorepo components that follow the BCIT-TLU image-tag
-# contract (sha-<commit> + semver-rc.<ts>.<short>).  Single-component
+# contract (sha-<commit> + semver-rc.<ts>.g<short>).  Single-component
 # repos work too — set `tag_prefix: "v"` to match plain `v*` tags.
 #
 # Caller example (hriv):
@@ -77,7 +77,7 @@ on:
         default: ""
     outputs:
       rc_version:
-        description: "Full RC version string (e.g. 1.2.3-rc.20260414194220.b286051). Empty when no changes detected."
+        description: "Full RC version string (e.g. 1.2.3-rc.20260414194220.gb286051). Empty when no changes detected."
         value: ${{ jobs.build.outputs.rc_version }}
       changed:
         description: "Whether changes were detected in the component's build context."
@@ -206,7 +206,13 @@ jobs:
           fi
 
           NEXT="${MAJOR}.${MINOR}.${PATCH}"
-          SHORT_SHA=$(git rev-parse --short HEAD)
+          # Prefix with 'g' (git convention) so the segment is always an
+          # alphanumeric SemVer identifier.  Without the prefix, an
+          # all-numeric hash starting with 0 (e.g. 0702969) is treated as
+          # a numeric identifier with a leading zero, which violates
+          # SemVer 2.0.0 §9 and causes `helm package` to reject the
+          # version string.
+          SHORT_SHA="g$(git rev-parse --short HEAD)"
           # Numerical timestamp suffix for Flux ImagePolicy sorting.
           TS=$(date -u +"%Y%m%d%H%M%S")
 
