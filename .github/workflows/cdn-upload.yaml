@@ -47,13 +47,13 @@ jobs:
     steps:
       - name: Download build artifact
         if: inputs.artifact_name != ''
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.dist_dir }}
 
       - name: Upload assets to Azure Blob Storage
-        uses: azure/CLI@v2
+        uses: azure/cli@v3
         env:
           SAS_TOKEN: ${{ secrets.CDN_SAS_TOKEN }}
           CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
