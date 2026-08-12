@@ -85,7 +85,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -104,7 +103,7 @@ jobs:
       actions: read              # Required by codeql-action/upload-sarif on private repos
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -245,7 +244,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}:${{ steps.version.outputs.next }}-rc.${{ steps.version.outputs.ts }}.${{ steps.version.outputs.short }}
 
       # ── Sign with Cosign (keyless / Sigstore) ────────────────
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4
         if: steps.changes.outputs.changed == 'true' && github.event_name != 'pull_request'
 
       - name: Sign image
