@@ -77,12 +77,14 @@ jobs:
             | sudo tar xz -C /usr/local/bin kubeconform
 
       # Cache the downloaded JSON schemas so repeated runs don't re-fetch them
-      # (keyed on the kubeconform version + Chart.yaml set).
+      # (keyed on the kubeconform version + every Chart.yaml in the repo).
+      # Hashing all Chart.yaml files (rather than a hardcoded `charts/**`
+      # glob) keeps the key accurate for callers whose charts live elsewhere.
       - name: Cache kubeconform schemas
         uses: actions/cache@v5
         with:
           path: /tmp/kubeconform-cache
-          key: kubeconform-schemas-${{ inputs.kubeconform_version }}-${{ hashFiles('charts/**/Chart.yaml') }}
+          key: kubeconform-schemas-${{ inputs.kubeconform_version }}-${{ hashFiles('**/Chart.yaml') }}
           restore-keys: |
             kubeconform-schemas-${{ inputs.kubeconform_version }}-
 
@@ -94,7 +96,13 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          charts=( ${CHART_GLOB} )
+          # `nullglob` only drops glob patterns that match nothing; a literal
+          # value like `charts/` survives even when the directory is absent,
+          # so filter the expansion down to entries that are real directories.
+          charts=()
+          for chart in ${CHART_GLOB}; do
+            [[ -d "${chart}" ]] && charts+=( "${chart}" )
+          done
           if [[ ${#charts[@]} -eq 0 ]]; then
             echo "::error::chart_glob '${CHART_GLOB}' matched no chart directories"
             exit 1
@@ -124,7 +132,13 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           mkdir -p /tmp/kubeconform-cache
-          charts=( ${CHART_GLOB} )
+          # `nullglob` only drops glob patterns that match nothing; a literal
+          # value like `charts/` survives even when the directory is absent,
+          # so filter the expansion down to entries that are real directories.
+          charts=()
+          for chart in ${CHART_GLOB}; do
+            [[ -d "${chart}" ]] && charts+=( "${chart}" )
+          done
           if [[ ${#charts[@]} -eq 0 ]]; then
             echo "::error::chart_glob '${CHART_GLOB}' matched no chart directories"
             exit 1
@@ -141,6 +155,10 @@ jobs:
 
       # Optional repo-specific check (e.g. a chart regression/CDN-rewrite
       # script) run only when the caller supplies `extra_command`.
+      # Passed via env (not interpolated into the script body) so shell
+      # metacharacters in the value are not expanded by the expression engine.
       - name: Run extra command
         if: inputs.extra_command != ''
-        run: ${{ inputs.extra_command }}
+        env:
+          EXTRA_COMMAND: ${{ inputs.extra_command }}
+        run: bash -c "$EXTRA_COMMAND"
