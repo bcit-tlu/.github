@@ -64,7 +64,7 @@ on:
         type: string
         default: ""
       tag_prefix:
-        description: "Prefix preceding the semver in tag_name (e.g. 'v' or 'backend-v'). A tag not matching is skipped."
+        description: "Prefix preceding the semver in tag_name (e.g. 'v' or 'backend-v'). A tag not matching is skipped. Matched literally — regex/glob metacharacters are not supported."
         required: false
         type: string
         default: v
@@ -119,8 +119,8 @@ jobs:
           if [[ -n "${VERSION_IN}" ]]; then
             echo "version=${VERSION_IN}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${TAG}" =~ ^${PREFIX}([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          elif [[ "${TAG}" == "${PREFIX}"* && "${TAG#"${PREFIX}"}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version=${TAG#"${PREFIX}"}" >> "$GITHUB_OUTPUT"
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
@@ -193,8 +193,10 @@ jobs:
             yq -i ".cdn.commitSha = \"${SHORT_SHA}\"" "${CHART_DIR}/values.yaml"
           fi
 
+          # Fail loudly on dependency-resolution errors — packaging with stale
+          # vendored subcharts after a failed update would publish a bad chart.
           if [[ "${UPDATE_DEPS}" == "true" ]]; then
-            helm dependency update "${CHART_DIR}" || true
+            helm dependency update "${CHART_DIR}"
           fi
 
           echo "::group::${CHART_NAME} ${VERSION}"

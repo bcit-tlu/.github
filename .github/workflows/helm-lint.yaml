@@ -38,12 +38,17 @@ on:
         type: string
         default: v0.6.7
       validate_continue_on_error:
-        description: "Treat kubeconform validation failures as non-fatal (schema downloads can be flaky). Strict `helm lint` stays the hard gate."
+        description: "Treat kubeconform validation failures as non-fatal (schema downloads can be flaky). The `helm lint` step stays the hard gate."
+        required: false
+        type: boolean
+        default: false
+      update_dependencies:
+        description: "Run `helm dependency update` on each chart before lint/template (charts with unvendored subchart deps fail both otherwise)."
         required: false
         type: boolean
         default: false
       extra_command:
-        description: "Optional shell command run after validation (e.g. a repo-specific chart test script)."
+        description: "Optional shell command run after validation (e.g. a repo-specific chart test script). Interpolated directly into the step's shell — must be a static literal, never derived from PR/branch data."
         required: false
         type: string
         default: ""
@@ -82,19 +87,33 @@ jobs:
             kubeconform-schemas-${{ inputs.kubeconform_version }}-
 
       # Hard gate: `helm lint` each chart in the glob. Any failure fails CI.
-      - name: Lint charts (strict gate)
+      - name: Lint charts (hard gate)
         env:
           CHART_GLOB: ${{ inputs.chart_glob }}
+          UPDATE_DEPS: ${{ inputs.update_dependencies }}
         run: |
           set -euo pipefail
-          for chart in ${CHART_GLOB}; do
+          shopt -s nullglob
+          charts=( ${CHART_GLOB} )
+          if [[ ${#charts[@]} -eq 0 ]]; then
+            echo "::error::chart_glob '${CHART_GLOB}' matched no chart directories"
+            exit 1
+          fi
+          # Fetch subchart deps first when the caller opts in — unvendored
+          # `dependencies:` in Chart.yaml fail both lint and template below.
+          if [[ "${UPDATE_DEPS}" == "true" ]]; then
+            for chart in "${charts[@]}"; do
+              helm dependency update "${chart}"
+            done
+          fi
+          for chart in "${charts[@]}"; do
             echo "::group::helm lint ${chart}"
             helm lint "${chart}"
             echo "::endgroup::"
           done
 
       # kubeconform schema downloads from raw.githubusercontent.com can be flaky
-      # on shared runners. Callers that want the strict `helm lint` above to be
+      # on shared runners. Callers that want the `helm lint` gate above to be
       # the primary gate can set validate_continue_on_error to absorb transient
       # download failures here.
       - name: Validate rendered charts with kubeconform
@@ -103,8 +122,14 @@ jobs:
           CHART_GLOB: ${{ inputs.chart_glob }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
           mkdir -p /tmp/kubeconform-cache
-          for chart in ${CHART_GLOB}; do
+          charts=( ${CHART_GLOB} )
+          if [[ ${#charts[@]} -eq 0 ]]; then
+            echo "::error::chart_glob '${CHART_GLOB}' matched no chart directories"
+            exit 1
+          fi
+          for chart in "${charts[@]}"; do
             echo "::group::kubeconform ${chart}"
             helm template test "${chart}" \
               | kubeconform -cache /tmp/kubeconform-cache -strict -summary \

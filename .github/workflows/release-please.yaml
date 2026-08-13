@@ -126,10 +126,15 @@ jobs:
         if: inputs.guard_stale_release_as && steps.rp.outputs.releases_created != 'true'
         run: |
           python3 - <<'PY'
-          import json, sys
-          with open("release-please-config.json") as f:
+          import json, os, sys
+          CONFIG = "release-please-config.json"
+          MANIFEST = ".release-please-manifest.json"
+          if not (os.path.exists(CONFIG) and os.path.exists(MANIFEST)):
+              print(f"::notice::Skipping stale release-as guard: {CONFIG} and/or {MANIFEST} not found (non-default release-please layout).")
+              sys.exit(0)
+          with open(CONFIG) as f:
               cfg = json.load(f)
-          with open(".release-please-manifest.json") as f:
+          with open(MANIFEST) as f:
               manifest = json.load(f)
           stale = []
           for pkg, conf in cfg.get("packages", {}).items():
@@ -166,8 +171,10 @@ jobs:
             echo "::warning::release-please reported a release but no tag_name output; skipping dispatch"
             exit 0
           fi
-          while IFS= read -r wf; do
-            wf="$(printf '%s' "${wf}" | xargs)"
+          # Plain `read` (default IFS) already strips leading/trailing
+          # whitespace; xargs would also do quote/backslash processing and
+          # abort on unmatched quotes under pipefail.
+          while read -r wf; do
             [[ -z "${wf}" ]] && continue
             echo "Dispatching ${wf} for ${TAG}"
             gh workflow run "${wf}" \

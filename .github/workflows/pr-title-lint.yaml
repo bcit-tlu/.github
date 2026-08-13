@@ -3,6 +3,9 @@
 # Language-agnostic — works for any repo (python, node, helm, etc.)
 # whose release tooling parses PR titles (e.g. release-please).
 #
+# Must be called from a `pull_request`/`pull_request_target` event — the
+# underlying action and the bot-skip guard need the PR context.
+#
 # Caller example:
 #
 #   name: pr-title-lint

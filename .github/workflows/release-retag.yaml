@@ -52,7 +52,7 @@ on:
         required: true
         type: string
       tag_prefix:
-        description: "Tag prefix preceding the semver (e.g. 'v' or 'backend-v'). A tag not matching this prefix is skipped."
+        description: "Tag prefix preceding the semver (e.g. 'v' or 'backend-v'). A tag not matching this prefix is skipped. Matched literally — regex/glob metacharacters are not supported."
         required: false
         type: string
         default: v
@@ -68,6 +68,10 @@ permissions:
 jobs:
   retag:
     runs-on: ubuntu-latest
+    # Serialize concurrent releases of the same image so the highest-stable
+    # check can't race when two tags are published close together (:latest).
+    concurrency:
+      group: retag-${{ github.repository }}-${{ inputs.image_name }}
     permissions:
       contents: read
       packages: write
@@ -84,7 +88,7 @@ jobs:
           TAG: ${{ inputs.tag_name }}
           PREFIX: ${{ inputs.tag_prefix }}
         run: |
-          if [[ "$TAG" =~ ^${PREFIX}([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+          if [[ "${TAG}" == "${PREFIX}"* && "${TAG#"${PREFIX}"}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             echo "version=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
             echo "match=true" >> "$GITHUB_OUTPUT"
           else
@@ -108,12 +112,19 @@ jobs:
           VERSION: ${{ steps.parse.outputs.version }}
           PREFIX: ${{ inputs.tag_prefix }}
         run: |
-          # Highest stable (non-prerelease) semver tag for this prefix.
-          HIGHEST=$(git tag -l "${PREFIX}[0-9]*.[0-9]*.[0-9]*" \
-            | sed "s/^${PREFIX}//" \
-            | grep -v -- '-' \
+          # Highest stable (non-prerelease) semver tag for this prefix. Prefix
+          # is matched/stripped literally; the semver filter drops prereleases.
+          # `|| true`: grep exits 1 when nothing matches (e.g. an incomplete
+          # tag fetch), which pipefail would turn into a step failure.
+          HIGHEST=$(git tag -l \
+            | while IFS= read -r t; do
+                if [[ "${t}" == "${PREFIX}"* ]]; then
+                  printf '%s\n' "${t#"${PREFIX}"}"
+                fi
+              done \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
             | sort -V \
-            | tail -n1)
+            | tail -n1) || true
 
           if [[ "${VERSION}" == "${HIGHEST}" ]]; then
             echo "is_highest=true" >> "$GITHUB_OUTPUT"
