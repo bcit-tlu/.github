@@ -124,7 +124,7 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "No version input and tag '${TAG}' does not match prefix '${PREFIX}'; skipping."
+            echo "::warning::No version input and tag '${TAG}' does not match prefix '${PREFIX}' — nothing published (expected in monorepo matrices for other components' tags; otherwise check tag_prefix)."
           fi
 
       # Check out the exact ref being published (release tag for releases,
@@ -188,8 +188,10 @@ jobs:
           mkdir -p "${DEST_DIR}"
 
           # Inject short commit SHA for CDN immutable path (matched by upload prefix).
+          # Pin --short=7: auto-abbreviation length varies with clone depth
+          # (this job is shallow, oci-build checks out full history).
           if [[ "${INJECT_CDN_SHA}" == "true" ]]; then
-            SHORT_SHA="$(git rev-parse --short HEAD)"
+            SHORT_SHA="$(git rev-parse --short=7 HEAD)"
             yq -i ".cdn.commitSha = \"${SHORT_SHA}\"" "${CHART_DIR}/values.yaml"
           fi
 

@@ -211,7 +211,9 @@ jobs:
           # a numeric identifier with a leading zero, which violates
           # SemVer 2.0.0 §9 and causes `helm package` to reject the
           # version string.
-          SHORT_SHA="g$(git rev-parse --short HEAD)"
+          # Pin --short=7 so the abbreviation length is identical regardless
+          # of clone depth (helm-publish checks out shallow; this job is full).
+          SHORT_SHA="g$(git rev-parse --short=7 HEAD)"
           # Numerical timestamp suffix for Flux ImagePolicy sorting.
           TS=$(date -u +"%Y%m%d%H%M%S")
 

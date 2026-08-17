@@ -93,6 +93,7 @@ jobs:
             echo "match=true" >> "$GITHUB_OUTPUT"
           else
             echo "match=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Tag '${TAG}' does not match prefix '${PREFIX}' — skipping retag (expected in monorepo matrices for other components' tags; otherwise check tag_prefix)."
           fi
 
       # Full history + tags are needed to compare against all prior releases
@@ -155,6 +156,10 @@ jobs:
 
       # Releases can be tagged before the commit's CI image finishes; poll
       # (with backoff, 30m cap) until the `sha-<commit>` image exists.
+      # Assumes the release commit touched the component's build context so
+      # oci-build's change detection produced an image (release-please always
+      # writes CHANGELOG/version files into the package path) — otherwise
+      # this step times out after 30m rather than finding nothing quickly.
       - name: Wait for source image
         if: steps.parse.outputs.match == 'true'
         env:

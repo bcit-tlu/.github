@@ -89,8 +89,12 @@ jobs:
 
       # On failure, post/update a sticky comment explaining the required
       # format so contributors can fix the title without digging through docs.
+      # continue-on-error: fork PRs on a plain `pull_request` trigger get a
+      # read-only token, so commenting can fail — keep the lint verdict as
+      # the signal rather than adding a second error on top.
       - name: Post failure explainer comment
         if: failure() && steps.lint.outcome == 'failure'
+        continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: pr-title-lint
@@ -118,6 +122,7 @@ jobs:
       # Once the title passes, remove the sticky failure comment.
       - name: Clear failure explainer on success
         if: success() && steps.lint.outcome == 'success'
+        continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: pr-title-lint

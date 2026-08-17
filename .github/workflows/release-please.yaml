@@ -61,7 +61,7 @@ on:
         type: string
         default: ""
       dispatch_workflows:
-        description: "Newline-separated workflow filenames to dispatch (with -f tag_name) for the single released tag. Leave empty for monorepos that dispatch per-path locally."
+        description: "Newline-separated workflow filenames to dispatch (with -f tag_name) for the single released tag. Leave empty for monorepos that dispatch per-path locally. Each workflow must exist at the released tag ref and accept a tag_name workflow_dispatch input, or its dispatch fails."
         required: false
         type: string
         default: ""
@@ -117,13 +117,15 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
-      # Guard: stale release-as pins block future semver bumps.
-      # Only need the repo checked out to inspect the config/manifest, and
-      # only when no release was cut this run.
+      # Guard: stale release-as pins block future semver bumps. Runs on every
+      # invocation — including the run that consumed the pin, where the
+      # manifest has just been updated to match release-as — so the leftover
+      # pin is flagged immediately on the release commit, not on some
+      # unrelated later push.
       - uses: actions/checkout@v7
-        if: inputs.guard_stale_release_as && steps.rp.outputs.releases_created != 'true'
+        if: inputs.guard_stale_release_as
       - name: Guard against stale `release-as` entries
-        if: inputs.guard_stale_release_as && steps.rp.outputs.releases_created != 'true'
+        if: inputs.guard_stale_release_as
         run: |
           python3 - <<'PY'
           import json, os, sys
@@ -140,11 +142,17 @@ jobs:
           for pkg, conf in cfg.get("packages", {}).items():
               ra = conf.get("release-as")
               if ra is not None and manifest.get(pkg) == ra:
-                  stale.append((pkg, ra))
+                  stale.append((f"packages.{pkg}", ra))
+          # A repository-wide (top-level) pin is inherited by every package;
+          # once any package's manifest matches it, the pin has been consumed
+          # and is silently freezing all future bumps.
+          global_ra = cfg.get("release-as")
+          if global_ra is not None and any(v == global_ra for v in manifest.values()):
+              stale.append(("top-level", global_ra))
           if stale:
               print("::error::Stale `release-as` entries in release-please-config.json:")
-              for pkg, ra in stale:
-                  print(f"::error::  packages.{pkg}.release-as={ra} already matches .release-please-manifest.json — remove this field so release-please can resume normal semver bumps.")
+              for loc, ra in stale:
+                  print(f"::error::  {loc} release-as={ra} already matches .release-please-manifest.json — remove this field so release-please can resume normal semver bumps.")
               sys.exit(1)
           PY
 
@@ -174,10 +182,17 @@ jobs:
           # Plain `read` (default IFS) already strips leading/trailing
           # whitespace; xargs would also do quote/backslash processing and
           # abort on unmatched quotes under pipefail.
+          # Dispatch failures are collected and reported at the end so one
+          # bad entry can't leave later workflows undispatched.
+          rc=0
           while read -r wf; do
             [[ -z "${wf}" ]] && continue
             echo "Dispatching ${wf} for ${TAG}"
-            gh workflow run "${wf}" \
+            if ! gh workflow run "${wf}" \
               --ref "${TAG}" \
-              -f tag_name="${TAG}"
+              -f tag_name="${TAG}"; then
+              echo "::error::Failed to dispatch ${wf} for ${TAG}"
+              rc=1
+            fi
           done <<< "${WORKFLOWS}"
+          exit "${rc}"
