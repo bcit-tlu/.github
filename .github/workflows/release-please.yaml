@@ -51,7 +51,7 @@ on:
   workflow_call:
     inputs:
       guard_stale_release_as:
-        description: "Fail if a `release-as` pin already matches the manifest (stale)."
+        description: "Fail if a `release-as` pin already matches the manifest (stale). Runs as a separate job so it never blocks downstream dispatch."
         required: false
         type: boolean
         default: true
@@ -117,15 +117,20 @@ jobs:
         with:
           token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
 
-      # Guard: stale release-as pins block future semver bumps. Runs on every
-      # invocation — including the run that consumed the pin, where the
-      # manifest has just been updated to match release-as — so the leftover
-      # pin is flagged immediately on the release commit, not on some
-      # unrelated later push.
+  # Guard: stale release-as pins block future semver bumps. Deliberately a
+  # separate job (needs: release), not a step of the release job: a consumed
+  # pin fires on the very run that tagged the release, and failing `release`
+  # there would make `needs: release` skip dispatch-publish — half-finishing
+  # an already-tagged release. A failing guard job still turns the run red.
+  guard-stale-release-as:
+    needs: release
+    if: inputs.guard_stale_release_as
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
       - uses: actions/checkout@v7
-        if: inputs.guard_stale_release_as
       - name: Guard against stale `release-as` entries
-        if: inputs.guard_stale_release_as
         run: |
           python3 - <<'PY'
           import json, os, sys
@@ -143,11 +148,13 @@ jobs:
               ra = conf.get("release-as")
               if ra is not None and manifest.get(pkg) == ra:
                   stale.append((f"packages.{pkg}", ra))
-          # A repository-wide (top-level) pin is inherited by every package;
-          # once any package's manifest matches it, the pin has been consumed
-          # and is silently freezing all future bumps.
+          # A repository-wide (top-level) pin is inherited by every package.
+          # Flag it only once EVERY package's manifest matches (pin fully
+          # consumed) — in a monorepo the pin may legitimately cover packages
+          # released across separate runs, and flagging on the first match
+          # would trip the guard mid-rollout.
           global_ra = cfg.get("release-as")
-          if global_ra is not None and any(v == global_ra for v in manifest.values()):
+          if global_ra is not None and manifest and all(v == global_ra for v in manifest.values()):
               stale.append(("top-level", global_ra))
           if stale:
               print("::error::Stale `release-as` entries in release-please-config.json:")

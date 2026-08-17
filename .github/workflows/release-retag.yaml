@@ -70,6 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     # Serialize concurrent releases of the same image so the highest-stable
     # check can't race when two tags are published close together (:latest).
+    # Caveat: GitHub keeps one in-progress + one pending run per group — a
+    # third concurrent release cancels the pending one (shows as "cancelled",
+    # and that version never gets its semver tag/signature). Re-run it manually.
     concurrency:
       group: retag-${{ github.repository }}-${{ inputs.image_name }}
     permissions:

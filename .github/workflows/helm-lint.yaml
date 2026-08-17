@@ -82,7 +82,9 @@ jobs:
           KUBECONFORM_SHA256: ${{ inputs.kubeconform_sha256 }}
         run: |
           set -euo pipefail
-          curl -sSL -o kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          # --fail: HTTP errors (bad version, outage) must fail here with a
+          # download error, not later as a confusing sha256 mismatch.
+          curl -fsSL -o kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
           sudo tar xz -C /usr/local/bin -f kubeconform.tar.gz kubeconform
           rm kubeconform.tar.gz
