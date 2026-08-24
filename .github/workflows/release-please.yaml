@@ -1,0 +1,205 @@
+# Reusable workflow: run release-please, guard against stale `release-as`
+# pins, and (for the common single-tag case) dispatch downstream tag
+# workflows. Releases created with GITHUB_TOKEN don't trigger `on:
+# release` workflows (anti-recursion guard), so they must be dispatched.
+#
+# Language-agnostic — release-please supports many release types
+# (simple, node, python, etc.); the repo's own release-please-config.json
+# selects the behavior. This workflow just orchestrates the run.
+#
+# Single-component caller (sugar-suite) — let the shared workflow do the
+# dispatch via `dispatch_workflows` (no local job needed):
+#
+#   jobs:
+#     release:
+#       uses: bcit-tlu/.github/.github/workflows/release-please.yaml@main
+#       permissions:
+#         contents: write
+#         issues: write
+#         pull-requests: write
+#         actions: write        # for dispatch_workflows
+#       with:
+#         dispatch_workflows: |
+#           helm-publish.yaml
+#           release-retag.yaml
+#       secrets: inherit
+#
+# Monorepo caller (hriv) — a single run can release multiple components,
+# so skip `dispatch_workflows` and dispatch per released path in a local
+# job (using the exposed paths_released / outputs). Pass a GitHub App
+# token so the release PR push triggers downstream CI (GITHUB_TOKEN's
+# anti-recursion guard would suppress it):
+#
+#   jobs:
+#     release:
+#       uses: bcit-tlu/.github/.github/workflows/release-please.yaml@main
+#       permissions:
+#         contents: write
+#         issues: write
+#         pull-requests: write
+#       with:
+#         app_id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+#       secrets:
+#         app_private_key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+#     dispatch:
+#       needs: release
+#       ...  # loop over needs.release.outputs.paths_released / outputs
+
+name: Release please
+
+on:
+  workflow_call:
+    inputs:
+      guard_stale_release_as:
+        description: "Fail if a `release-as` pin already matches the manifest (stale). Runs as a separate job so it never blocks downstream dispatch."
+        required: false
+        type: boolean
+        default: true
+      app_id:
+        description: "GitHub App ID for a token that triggers downstream CI on the release PR push. Empty = use GITHUB_TOKEN."
+        required: false
+        type: string
+        default: ""
+      dispatch_workflows:
+        description: "Newline-separated workflow filenames to dispatch (with -f tag_name) for the single released tag. Leave empty for monorepos that dispatch per-path locally. Each workflow must exist at the released tag ref and accept a tag_name workflow_dispatch input, or its dispatch fails."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      app_private_key:
+        description: "Private key for the GitHub App identified by app_id."
+        required: false
+    outputs:
+      releases_created:
+        description: "Whether release-please created a release."
+        value: ${{ jobs.release.outputs.releases_created }}
+      tag_name:
+        description: "Released tag name (empty / single-package repos)."
+        value: ${{ jobs.release.outputs.tag_name }}
+      paths_released:
+        description: "JSON array of package paths released (manifest/monorepo mode)."
+        value: ${{ jobs.release.outputs.paths_released }}
+      outputs:
+        description: "Full release-please outputs as a JSON object (for per-path tag lookup)."
+        value: ${{ jobs.release.outputs.outputs }}
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      releases_created: ${{ steps.rp.outputs.releases_created }}
+      tag_name: ${{ steps.rp.outputs['tag_name'] }}
+      paths_released: ${{ steps.rp.outputs.paths_released }}
+      outputs: ${{ toJSON(steps.rp.outputs) }}
+    steps:
+      # A GitHub App token is required for monorepos so the release PR
+      # push triggers downstream workflows (ci.yaml, pr-title-lint).
+      # GITHUB_TOKEN's anti-recursion guard would silently suppress them.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        if: inputs.app_id != ''
+        with:
+          app-id: ${{ inputs.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+
+      # Run release-please: opens/updates the release PR, or (when a release
+      # PR merges) tags the release. Uses the App token when provided so the
+      # release PR push can trigger downstream CI; otherwise GITHUB_TOKEN.
+      - uses: googleapis/release-please-action@v5
+        id: rp
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+
+  # Guard: stale release-as pins block future semver bumps. Deliberately a
+  # separate job (needs: release), not a step of the release job: a consumed
+  # pin fires on the very run that tagged the release, and failing `release`
+  # there would make `needs: release` skip dispatch-publish — half-finishing
+  # an already-tagged release. A failing guard job still turns the run red.
+  guard-stale-release-as:
+    needs: release
+    if: inputs.guard_stale_release_as
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Guard against stale `release-as` entries
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          CONFIG = "release-please-config.json"
+          MANIFEST = ".release-please-manifest.json"
+          if not (os.path.exists(CONFIG) and os.path.exists(MANIFEST)):
+              print(f"::notice::Skipping stale release-as guard: {CONFIG} and/or {MANIFEST} not found (non-default release-please layout).")
+              sys.exit(0)
+          with open(CONFIG) as f:
+              cfg = json.load(f)
+          with open(MANIFEST) as f:
+              manifest = json.load(f)
+          stale = []
+          for pkg, conf in cfg.get("packages", {}).items():
+              ra = conf.get("release-as")
+              if ra is not None and manifest.get(pkg) == ra:
+                  stale.append((f"packages.{pkg}", ra))
+          # A repository-wide (top-level) pin is inherited by every package.
+          # Flag it only once EVERY package's manifest matches (pin fully
+          # consumed) — in a monorepo the pin may legitimately cover packages
+          # released across separate runs, and flagging on the first match
+          # would trip the guard mid-rollout.
+          global_ra = cfg.get("release-as")
+          if global_ra is not None and manifest and all(v == global_ra for v in manifest.values()):
+              stale.append(("top-level", global_ra))
+          if stale:
+              print("::error::Stale `release-as` entries in release-please-config.json:")
+              for loc, ra in stale:
+                  print(f"::error::  {loc} release-as={ra} already matches .release-please-manifest.json — remove this field so release-please can resume normal semver bumps.")
+              sys.exit(1)
+          PY
+
+  # Common single-tag case: dispatch the given workflows for the released
+  # tag. Monorepos leave dispatch_workflows empty and dispatch per-path in
+  # their own job instead (see the header example).
+  dispatch-publish:
+    needs: release
+    if: needs.release.outputs.releases_created == 'true' && inputs.dispatch_workflows != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch downstream workflows for the released tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag_name }}
+          WORKFLOWS: ${{ inputs.dispatch_workflows }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAG}" ]]; then
+            echo "::warning::release-please reported a release but no tag_name output; skipping dispatch"
+            exit 0
+          fi
+          # Plain `read` (default IFS) already strips leading/trailing
+          # whitespace; xargs would also do quote/backslash processing and
+          # abort on unmatched quotes under pipefail.
+          # Dispatch failures are collected and reported at the end so one
+          # bad entry can't leave later workflows undispatched.
+          rc=0
+          while read -r wf; do
+            [[ -z "${wf}" ]] && continue
+            echo "Dispatching ${wf} for ${TAG}"
+            if ! gh workflow run "${wf}" \
+              --ref "${TAG}" \
+              -f tag_name="${TAG}"; then
+              echo "::error::Failed to dispatch ${wf} for ${TAG}"
+              rc=1
+            fi
+          done <<< "${WORKFLOWS}"
+          exit "${rc}"

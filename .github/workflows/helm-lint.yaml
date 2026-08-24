@@ -1,0 +1,177 @@
+# Reusable workflow: lint and (optionally) kubeconform-validate Helm charts.
+#
+# Language-agnostic — works for single-chart repos (chart_glob: "charts/")
+# and monorepos with several charts (chart_glob: "charts/*/").
+#
+# Single-chart caller (sugar-suite / course-workload-estimator):
+#
+#   jobs:
+#     helm-lint:
+#       uses: bcit-tlu/.github/.github/workflows/helm-lint.yaml@main
+#       with:
+#         chart_glob: "charts/"
+#         extra_command: bash tests/helm-cdn-rewrite.sh   # optional
+#
+# Monorepo caller (hriv):
+#
+#   jobs:
+#     helm-lint:
+#       uses: bcit-tlu/.github/.github/workflows/helm-lint.yaml@main
+#       with:
+#         chart_glob: "charts/*/"
+#         validate_continue_on_error: true
+#         extra_command: bash scripts/test-helm-chart-regressions.sh
+
+name: Helm lint
+
+on:
+  workflow_call:
+    inputs:
+      chart_glob:
+        description: "Space/glob-expandable list of chart directories to lint (e.g. 'charts/' or 'charts/*/')."
+        required: false
+        type: string
+        default: "charts/"
+      kubeconform_version:
+        description: "kubeconform release to install."
+        required: false
+        type: string
+        default: v0.6.7
+      kubeconform_sha256:
+        description: "Expected SHA256 of the kubeconform linux-amd64 tarball (must match kubeconform_version; update both together)."
+        required: false
+        type: string
+        default: 95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73
+      validate_continue_on_error:
+        description: "Treat kubeconform validation failures as non-fatal (schema downloads can be flaky). The `helm lint` step stays the hard gate. Note this also absorbs helm template rendering errors in the validation step, not just download flakes."
+        required: false
+        type: boolean
+        default: false
+      update_dependencies:
+        description: "Run `helm dependency update` on each chart before lint/template (charts with unvendored subchart deps fail both otherwise)."
+        required: false
+        type: boolean
+        default: false
+      extra_command:
+        description: "Optional shell command run after validation (e.g. a repo-specific chart test script). Passed via env and executed with `bash -c` — still arbitrary shell code, so it must be a static literal, never derived from PR/branch data."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Bring the chart sources into the runner.
+      - uses: actions/checkout@v7
+
+      # `helm` is used both to lint and to render charts for kubeconform.
+      - uses: azure/setup-helm@v5
+
+      # kubeconform renders + schema-validates the templated manifests.
+      # Verify the tarball's checksum before extracting — it lands in
+      # /usr/local/bin and runs with the job's token in every caller repo.
+      - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
+          KUBECONFORM_SHA256: ${{ inputs.kubeconform_sha256 }}
+        run: |
+          set -euo pipefail
+          # --fail: HTTP errors (bad version, outage) must fail here with a
+          # download error, not later as a confusing sha256 mismatch.
+          curl -fsSL -o kubeconform.tar.gz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          sudo tar xz -C /usr/local/bin -f kubeconform.tar.gz kubeconform
+          rm kubeconform.tar.gz
+
+      # Cache the downloaded JSON schemas so repeated runs don't re-fetch them
+      # (keyed on the kubeconform version + chart templates/manifests). The
+      # rendered kinds/versions come from templates/, so hash those alongside
+      # Chart.yaml or new CRD kinds silently miss the cache on every run.
+      - name: Cache kubeconform schemas
+        uses: actions/cache@v5
+        with:
+          path: /tmp/kubeconform-cache
+          key: kubeconform-schemas-${{ inputs.kubeconform_version }}-${{ hashFiles('**/Chart.yaml', '**/templates/**') }}
+          restore-keys: |
+            kubeconform-schemas-${{ inputs.kubeconform_version }}-
+
+      # Hard gate: `helm lint` each chart in the glob. Any failure fails CI.
+      - name: Lint charts (hard gate)
+        env:
+          CHART_GLOB: ${{ inputs.chart_glob }}
+          UPDATE_DEPS: ${{ inputs.update_dependencies }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # `nullglob` only drops glob patterns that match nothing; a literal
+          # value like `charts/` survives even when the directory is absent,
+          # so filter the expansion down to entries that are real directories.
+          charts=()
+          for chart in ${CHART_GLOB}; do
+            [[ -d "${chart}" ]] && charts+=( "${chart}" )
+          done
+          if [[ ${#charts[@]} -eq 0 ]]; then
+            echo "::error::chart_glob '${CHART_GLOB}' matched no chart directories"
+            exit 1
+          fi
+          # Fetch subchart deps first when the caller opts in — unvendored
+          # `dependencies:` in Chart.yaml fail both lint and template below.
+          if [[ "${UPDATE_DEPS}" == "true" ]]; then
+            for chart in "${charts[@]}"; do
+              helm dependency update "${chart}"
+            done
+          fi
+          for chart in "${charts[@]}"; do
+            echo "::group::helm lint ${chart}"
+            helm lint "${chart}"
+            echo "::endgroup::"
+          done
+
+      # kubeconform schema downloads from raw.githubusercontent.com can be flaky
+      # on shared runners. Callers that want the `helm lint` gate above to be
+      # the primary gate can set validate_continue_on_error to absorb transient
+      # download failures here.
+      - name: Validate rendered charts with kubeconform
+        continue-on-error: ${{ inputs.validate_continue_on_error }}
+        env:
+          CHART_GLOB: ${{ inputs.chart_glob }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p /tmp/kubeconform-cache
+          # `nullglob` only drops glob patterns that match nothing; a literal
+          # value like `charts/` survives even when the directory is absent,
+          # so filter the expansion down to entries that are real directories.
+          charts=()
+          for chart in ${CHART_GLOB}; do
+            [[ -d "${chart}" ]] && charts+=( "${chart}" )
+          done
+          if [[ ${#charts[@]} -eq 0 ]]; then
+            echo "::error::chart_glob '${CHART_GLOB}' matched no chart directories"
+            exit 1
+          fi
+          for chart in "${charts[@]}"; do
+            echo "::group::kubeconform ${chart}"
+            helm template test "${chart}" \
+              | kubeconform -cache /tmp/kubeconform-cache -strict -summary \
+                  -schema-location default \
+                  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+                  -ignore-missing-schemas
+            echo "::endgroup::"
+          done
+
+      # Optional repo-specific check (e.g. a chart regression/CDN-rewrite
+      # script) run only when the caller supplies `extra_command`.
+      # Passed via env (not interpolated into the script body) so shell
+      # metacharacters in the value are not expanded by the expression engine.
+      - name: Run extra command
+        if: inputs.extra_command != ''
+        env:
+          EXTRA_COMMAND: ${{ inputs.extra_command }}
+        run: bash -c "$EXTRA_COMMAND"
