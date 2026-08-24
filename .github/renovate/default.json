@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Shared Renovate preset for bcit-tlu repos.",
+    "All minor + patch updates (any ecosystem) are batched into a single PR",
+    "(branch renovate/all-minor-patch) that Renovate keeps force-updating in",
+    "place until it is merged or closed. Major updates get one PR each.",
+    "Updates are held until a release is 7 days old (supply-chain safety);",
+    "security fixes bypass this delay.",
+    "Consume from any repo with: \"extends\": [\"github>bcit-tlu/.github\"]"
+  ],
+  "extends": ["config:recommended", "group:allNonMajor"],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict"
+}

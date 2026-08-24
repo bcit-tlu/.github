@@ -1,0 +1,58 @@
+# Reusable workflow: run self-hosted Renovate on a schedule.
+#
+# Uses the repo's GITHUB_TOKEN.
+# PRs are opened by github-actions[bot]; CI workflows on those PRs require
+# one-time approval from a user with write access
+#
+# The repo's renovate.json (extending github>bcit-tlu/.github) controls
+# grouping, minimumReleaseAge, and all other policy.
+#
+# Caller example:
+#
+#   name: renovate
+#   on:
+#     schedule:
+#       - cron: '0 9 * * 1-5'
+#     workflow_dispatch:
+#   jobs:
+#     renovate:
+#       uses: bcit-tlu/.github/.github/workflows/renovate.yaml@main
+#       secrets: inherit
+
+name: Renovate
+
+on:
+  workflow_call:
+    inputs:
+      config_file:
+        description: "Path to the repo's Renovate config file."
+        required: false
+        type: string
+        default: "renovate.json"
+      renovate_version:
+        description: "renovatebot/github-action version to use."
+        required: false
+        type: string
+        default: "v46.2.3"
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: write
+      workflows: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Run Renovate
+        uses: renovatebot/github-action@${{ inputs.renovate_version }}
+        with:
+          configurationFile: ${{ inputs.config_file }}
+          token: ${{ secrets.GITHUB_TOKEN }}
