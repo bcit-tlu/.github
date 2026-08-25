@@ -51,3 +51,5 @@ jobs:
         with:
           configurationFile: ${{ inputs.config_file }}
           token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
