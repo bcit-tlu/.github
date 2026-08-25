@@ -29,11 +29,6 @@ on:
         required: false
         type: string
         default: "renovate.json"
-      renovate_version:
-        description: "renovatebot/github-action version to use."
-        required: false
-        type: string
-        default: "v46.2.3"
 
 permissions:
   contents: read
@@ -46,13 +41,13 @@ jobs:
       pull-requests: write
       issues: write
       checks: write
-      workflows: write
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
 
       - name: Run Renovate
-        uses: renovatebot/github-action@${{ inputs.renovate_version }}
+        uses: renovatebot/github-action@v46.2.3
         with:
           configurationFile: ${{ inputs.config_file }}
           token: ${{ secrets.GITHUB_TOKEN }}

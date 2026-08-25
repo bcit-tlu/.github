@@ -7,7 +7,7 @@
     "place until it is merged or closed. Major updates get one PR each.",
     "Updates are held until a release is 7 days old (supply-chain safety);",
     "security fixes bypass this delay.",
-    "Consume from any repo with: \"extends\": [\"github>bcit-tlu/.github\"]"
+    "Consume from any repo with: \"extends\": [\"github>bcit-tlu/.github//.github/renovate/default\"]"
   ],
   "extends": ["config:recommended", "group:allNonMajor"],
   "minimumReleaseAge": "7 days",
