@@ -5,11 +5,14 @@
     "All minor + patch updates (any ecosystem) are batched into a single PR",
     "(branch renovate/all-minor-patch) that Renovate keeps force-updating in",
     "place until it is merged or closed. Major updates get one PR each.",
-    "Updates are held until a release is 7 days old (supply-chain safety);",
-    "security fixes bypass this delay.",
+    "Updates are held until a release is 7 days old (supply-chain safety).",
+    "Vulnerability alerts are disabled (GITHUB_TOKEN cannot read Dependabot alerts).",
     "Consume from any repo with: \"extends\": [\"github>bcit-tlu/.github//.github/renovate/default\"]"
   ],
   "extends": ["config:recommended", "group:allNonMajor"],
   "minimumReleaseAge": "7 days",
-  "internalChecksFilter": "strict"
+  "internalChecksFilter": "strict",
+  "vulnerabilityAlerts": {
+    "enabled": false
+  }
 }
