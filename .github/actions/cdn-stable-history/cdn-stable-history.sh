@@ -31,10 +31,16 @@ trap 'rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
 
 # Ensure the lock blob exists. A separate lock blob prevents concurrent
 # releases from reading the same history and then overwriting each other.
-if [ "$(az storage blob exists \
+lock_exists_output=$(az storage blob exists \
   --container-name "$CDN_CONTAINER" \
   --name "$LOCK_BLOB" \
-  --query exists -o tsv 2>/dev/null)" != "true" ]; then
+  --query exists -o tsv 2>/dev/null)
+lock_exists_exit=$?
+if [ "$lock_exists_exit" -ne 0 ]; then
+  echo "ERROR: failed to check existence of lock blob ${LOCK_BLOB}" >&2
+  exit 1
+fi
+if [ "$lock_exists_output" != "true" ]; then
   if ! az storage blob upload \
     --container-name "$CDN_CONTAINER" \
     --file "$EMPTY" \
@@ -63,10 +69,16 @@ trap 'release_lock; rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
 
 # Download existing history if present; fail on unexpected errors so a transient
 # outage does not cause us to drop the history.
-if [ "$(az storage blob exists \
+history_exists_output=$(az storage blob exists \
   --container-name "$CDN_CONTAINER" \
   --name "$HISTORY_BLOB" \
-  --query exists -o tsv 2>/dev/null)" = "true" ]; then
+  --query exists -o tsv 2>/dev/null)
+history_exists_exit=$?
+if [ "$history_exists_exit" -ne 0 ]; then
+  echo "ERROR: failed to check existence of history blob ${HISTORY_BLOB}" >&2
+  exit 1
+fi
+if [ "$history_exists_output" = "true" ]; then
   if ! az storage blob download \
     --container-name "$CDN_CONTAINER" \
     --name "$HISTORY_BLOB" \

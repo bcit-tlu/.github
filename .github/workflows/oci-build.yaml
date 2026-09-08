@@ -115,6 +115,8 @@ jobs:
           INPUT_CONTEXT: ${{ inputs.context }}
           INPUT_EXTRA_WATCH: ${{ inputs.extra_watch_paths }}
           EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA_: ${{ github.sha }}
         run: |
           set -euo pipefail
 
