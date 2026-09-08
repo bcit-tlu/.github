@@ -10,6 +10,12 @@ SHORT_SHA="${SHORT_SHA:?SHORT_SHA is required}"
 ASSET_EXTENSIONS="${ASSET_EXTENSIONS:?ASSET_EXTENSIONS is required}"
 DIST_DIR="${DIST_DIR:-dist}"
 
+# Sanitize asset extensions before interpolating them into Perl regex source.
+if [[ "$ASSET_EXTENSIONS" =~ [^a-zA-Z0-9,] ]]; then
+  echo "ERROR: ASSET_EXTENSIONS contains invalid characters: ${ASSET_EXTENSIONS}" >&2
+  exit 1
+fi
+
 if [ -n "$CDN_NAMESPACE" ]; then
   CDN_URL="${CDN_BASE_URL%/}/${CDN_NAMESPACE}/${REPO_NAME}/${SHORT_SHA}"
 else
@@ -47,7 +53,7 @@ find "$DIST_DIR" -type f -name '*.html' | while read -r f; do
       return join q{/}, @out;
     };
 
-    my $pat = qr{(src|href|data-src)=(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2}i;
+    my $pat = qr{(src|href|data-src)\s*=\s*(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2}i;
     s{$pat}{
       my ($attr, $q, $path) = ($1, $2, $3);
       $path =~ s{^\s+|\s+$}{}g;
@@ -107,18 +113,20 @@ find "$DIST_DIR" -type f -name '*.css' | while read -r f; do
       return "$cdn/$p";
     };
 
+    # Handle @import first so url() inside @import is preserved as a valid
+    # @import url("...") statement rather than being stripped to a bare path.
+    my $import_pat = qr{\@import\s+(?:url\()?(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\)?}i;
+    s{$import_pat}{
+      my ($q, $path) = ($1, $2);
+      my $new = $rewrite->($path);
+      "\@import url(\"$new\")";
+    }eg;
+
     my $url_pat = qr{url\(\s*(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\s*\)}i;
     s{$url_pat}{
       my ($q, $path) = ($1, $2);
       my $new = $rewrite->($path);
       "url(" . ($q // q{}) . $new . ($q // q{}) . ")";
-    }eg;
-
-    my $import_pat = qr{\@import\s+(?:url\()?(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\)?}i;
-    s{$import_pat}{
-      my ($q, $path) = ($1, $2);
-      my $new = $rewrite->($path);
-      "\@import " . ($q // q{}) . $new . ($q // q{});
     }eg;
   ' "$f"
 done
@@ -177,11 +185,26 @@ done
 echo "CDN rewrite complete."
 
 # Verify the rewrite actually injected the immutable CDN URL into files that
-# contain asset references. Vendor files that reference no assets do not need
-# rewriting, so skip them.
-asset_ref_regex="\.(${EXT_PATTERN})([#?][^\"\)]*)?([\"\'\)]|$)"
+# contain asset references. Use the same patterns the rewriter uses so plain
+# extension-shaped text (e.g. examples in documentation) does not trigger false
+# positives.
 missing_files=$(find "$DIST_DIR"/ -type f \( -name '*.html' -o -name '*.css' -o -name '*.js' \) | while read -r f; do
-  if grep -qE "${asset_ref_regex}" "$f" && ! grep -qF "${CDN_URL}/" "$f"; then
+  has_asset_ref=$(perl -e '
+    my $cdn  = $ARGV[0] // q{};
+    my $exts = $ARGV[1] // q{};
+    my $file = $ARGV[2];
+    exit 0 unless $cdn && $exts;
+    open my $fh, q{<}, $file or exit 0;
+    my $content = do { local $/; <$fh> };
+    my $html_pat = qr{(src|href|data-src)\s*=\s*(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2}i;
+    my $css_url_pat = qr{url\(\s*(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\s*\)}i;
+    my $css_import_pat = qr{\@import\s+(?:url\()?(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\)?}i;
+    my $js_pat = qr{(["\x27])([^"\x27]+?\.(?:$exts)(?:[#?][^"\x27]*)?)\1}i;
+    exit 1 if $content =~ $html_pat || $content =~ $css_url_pat || $content =~ $css_import_pat || $content =~ $js_pat;
+    exit 0;
+  ' "$CDN_URL" "$EXT_PATTERN" "$f")
+
+  if [ "$has_asset_ref" -eq 1 ] && ! grep -qF "${CDN_URL}/" "$f"; then
     printf '%s\n' "$f"
   fi
 done)

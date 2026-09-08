@@ -34,9 +34,9 @@ inputs:
     description: |
       Optional path to a custom rewrite script relative to the caller repo root.
       If provided and enabled is 'true', this script runs instead of the
-      built-in rewrite. It receives the same environment variables:
-      CDN_URL, EXT_PATTERN, DIST_DIR, plus CDN_BASE_URL, CDN_NAMESPACE,
-      REPO_NAME, SHORT_SHA, ASSET_EXTENSIONS.
+      built-in rewrite. It receives the environment variables: CDN_URL,
+      EXT_PATTERN, DIST_DIR, CDN_BASE_URL, CDN_NAMESPACE, REPO_NAME, SHORT_SHA,
+      and ASSET_EXTENSIONS.
     required: false
     default: ""
 
@@ -47,6 +47,27 @@ runs:
       if: inputs.enabled == 'true'
       shell: bash
       run: |
+        set -euo pipefail
+
+        if [ -n "${CUSTOM_REWRITE_SCRIPT}" ]; then
+          case "${CUSTOM_REWRITE_SCRIPT}" in
+            /*|*..*)
+              echo "ERROR: custom_rewrite_script must be a relative path within the workspace" >&2
+              exit 1
+              ;;
+          esac
+        fi
+
+        CDN_NAMESPACE="${CDN_NAMESPACE:-}"
+        [ "$CDN_NAMESPACE" = "none" ] && CDN_NAMESPACE=""
+        if [ -n "$CDN_NAMESPACE" ]; then
+          CDN_URL="${CDN_BASE_URL%/}/${CDN_NAMESPACE}/${REPO_NAME}/${SHORT_SHA}"
+        else
+          CDN_URL="${CDN_BASE_URL%/}/${REPO_NAME}/${SHORT_SHA}"
+        fi
+        EXT_PATTERN="${ASSET_EXTENSIONS//,/|}"
+        export CDN_URL EXT_PATTERN
+
         if [ -n "${CUSTOM_REWRITE_SCRIPT}" ]; then
           bash "${CUSTOM_REWRITE_SCRIPT}"
         else

@@ -274,9 +274,10 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}
           DIGEST: ${{ steps.build-push.outputs.digest }}
           EVENT_NAME: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
         run: |
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            echo "ref=${IMAGE}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+            echo "ref=${IMAGE}:sha-${SHA}" >> "$GITHUB_OUTPUT"
           else
             echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
           fi

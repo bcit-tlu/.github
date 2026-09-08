@@ -24,14 +24,57 @@ else
 fi
 
 HISTORY_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-history"
+LOCK_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-history.lock"
 TMP=$(mktemp)
-trap 'rm -f "$TMP" "${TMP}.new"' EXIT
+EMPTY=$(mktemp)
+trap 'rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
 
-# Download existing history if present; ignore 404 on first run.
-az storage blob download \
+# Ensure the lock blob exists. A separate lock blob prevents concurrent
+# releases from reading the same history and then overwriting each other.
+if [ "$(az storage blob exists \
+  --container-name "$CDN_CONTAINER" \
+  --name "$LOCK_BLOB" \
+  --query exists -o tsv 2>/dev/null)" != "true" ]; then
+  if ! az storage blob upload \
+    --container-name "$CDN_CONTAINER" \
+    --file "$EMPTY" \
+    --name "$LOCK_BLOB" >/dev/null 2>/dev/null; then
+    echo "ERROR: failed to create history lock blob ${LOCK_BLOB}" >&2
+    exit 1
+  fi
+fi
+
+lease_id=$(az storage blob lease acquire \
+  --container-name "$CDN_CONTAINER" \
+  --blob-name "$LOCK_BLOB" \
+  --lease-duration 60 \
+  --query leaseId -o tsv 2>/dev/null) || {
+    echo "ERROR: failed to acquire history update lock on ${LOCK_BLOB}" >&2
+    exit 1
+  }
+
+release_lock() {
+  az storage blob lease release \
+    --container-name "$CDN_CONTAINER" \
+    --blob-name "$LOCK_BLOB" \
+    --lease-id "$lease_id" >/dev/null 2>&1 || true
+}
+trap 'release_lock; rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
+
+# Download existing history if present; fail on unexpected errors so a transient
+# outage does not cause us to drop the history.
+if [ "$(az storage blob exists \
   --container-name "$CDN_CONTAINER" \
   --name "$HISTORY_BLOB" \
-  --file "$TMP" 2>/dev/null || true
+  --query exists -o tsv 2>/dev/null)" = "true" ]; then
+  if ! az storage blob download \
+    --container-name "$CDN_CONTAINER" \
+    --name "$HISTORY_BLOB" \
+    --file "$TMP" 2>/dev/null; then
+    echo "ERROR: failed to download existing history blob ${HISTORY_BLOB}" >&2
+    exit 1
+  fi
+fi
 
 # Prepend new SHA, remove duplicates and blanks, keep last KEEP_STABLE.
 {
@@ -39,8 +82,11 @@ az storage blob download \
   cat "$TMP"
 } | awk 'NF && !seen[$0]++' | head -n "$KEEP_STABLE" > "${TMP}.new"
 
-az storage blob upload \
+if ! az storage blob upload \
   --container-name "$CDN_CONTAINER" \
   --file "${TMP}.new" \
   --name "$HISTORY_BLOB" \
-  --overwrite
+  --overwrite; then
+  echo "ERROR: failed to upload updated history blob ${HISTORY_BLOB}" >&2
+  exit 1
+fi
