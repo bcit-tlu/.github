@@ -189,7 +189,7 @@ echo "CDN rewrite complete."
 # extension-shaped text (e.g. examples in documentation) does not trigger false
 # positives.
 missing_files=$(find "$DIST_DIR"/ -type f \( -name '*.html' -o -name '*.css' -o -name '*.js' \) | while read -r f; do
-  has_asset_ref=$(perl -e '
+  if perl -e '
     my $cdn  = $ARGV[0] // q{};
     my $exts = $ARGV[1] // q{};
     my $file = $ARGV[2];
@@ -202,10 +202,13 @@ missing_files=$(find "$DIST_DIR"/ -type f \( -name '*.html' -o -name '*.css' -o 
     my $js_pat = qr{(["\x27])([^"\x27]+?\.(?:$exts)(?:[#?][^"\x27]*)?)\1}i;
     exit 1 if $content =~ $html_pat || $content =~ $css_url_pat || $content =~ $css_import_pat || $content =~ $js_pat;
     exit 0;
-  ' "$CDN_URL" "$EXT_PATTERN" "$f")
-
-  if [ "$has_asset_ref" -eq 1 ] && ! grep -qF "${CDN_URL}/" "$f"; then
-    printf '%s\n' "$f"
+  ' "$CDN_URL" "$EXT_PATTERN" "$f"; then
+    : # no unrewritten asset references found
+  else
+    # Perl exit 1 means an unrewritten asset reference was found.
+    if ! grep -qF "${CDN_URL}/" "$f"; then
+      printf '%s\n' "$f"
+    fi
   fi
 done)
 if [ -n "${missing_files}" ]; then

@@ -32,12 +32,20 @@ LIST_TMP=$(mktemp)
 trap 'rm -f "$TMP" "$LIST_TMP"' EXIT
 protected=("$LATEST_SHA")
 
-# Only read history if the blob exists. If it exists and we cannot download it,
-# abort rather than risk deleting stable assets.
-if [ "$(az storage blob exists \
+# Only read history if the blob exists. If the existence check itself fails or
+# the blob exists but cannot be downloaded, abort rather than risk deleting
+# stable assets.
+history_exists_output=$(az storage blob exists \
   --container-name "$CDN_CONTAINER" \
   --name "$HISTORY_BLOB" \
-  --query exists -o tsv 2>/dev/null)" = "true" ]; then
+  --query exists -o tsv 2>/dev/null)
+history_exists_exit=$?
+if [ "$history_exists_exit" -ne 0 ]; then
+  echo "ERROR: failed to check existence of history blob ${HISTORY_BLOB}; aborting cleanup" >&2
+  exit 1
+fi
+
+if [ "$history_exists_output" = "true" ]; then
   if ! az storage blob download \
     --container-name "$CDN_CONTAINER" \
     --name "$HISTORY_BLOB" \
