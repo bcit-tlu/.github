@@ -114,10 +114,11 @@ jobs:
         env:
           INPUT_CONTEXT: ${{ inputs.context }}
           INPUT_EXTRA_WATCH: ${{ inputs.extra_watch_paths }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             BASE="${{ github.event.pull_request.base.sha }}"
             HEAD="${{ github.event.pull_request.head.sha }}"
           else
@@ -272,8 +273,9 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}
           DIGEST: ${{ steps.build-push.outputs.digest }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             echo "ref=${IMAGE}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
             echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
