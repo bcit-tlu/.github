@@ -122,8 +122,8 @@ jobs:
             BASE="${{ github.event.pull_request.base.sha }}"
             HEAD="${{ github.event.pull_request.head.sha }}"
           else
-            BASE="${{ github.event.before }}"
-            HEAD="${{ github.sha }}"
+            BASE="$PUSH_BEFORE"
+            HEAD="$GITHUB_SHA_"
           fi
 
           # Fall back to HEAD~1 when the base SHA is missing (first
