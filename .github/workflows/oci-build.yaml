@@ -114,15 +114,20 @@ jobs:
         env:
           INPUT_CONTEXT: ${{ inputs.context }}
           INPUT_EXTRA_WATCH: ${{ inputs.extra_watch_paths }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA_: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-            HEAD="${{ github.event.pull_request.head.sha }}"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            BASE="$PR_BASE_SHA"
+            HEAD="$PR_HEAD_SHA"
           else
-            BASE="${{ github.event.before }}"
-            HEAD="${{ github.sha }}"
+            BASE="$PUSH_BEFORE"
+            HEAD="$GITHUB_SHA_"
           fi
 
           # Fall back to HEAD~1 when the base SHA is missing (first
@@ -272,9 +277,11 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ inputs.image_name }}
           DIGEST: ${{ steps.build-push.outputs.digest }}
+          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_SHA_: ${{ github.sha }}
         run: |
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            echo "ref=${IMAGE}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            echo "ref=${IMAGE}:sha-${GITHUB_SHA_}" >> "$GITHUB_OUTPUT"
           else
             echo "ref=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
           fi
