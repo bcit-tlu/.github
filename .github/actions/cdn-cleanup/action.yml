@@ -1,0 +1,43 @@
+name: "CDN cleanup old SHA prefixes"
+description: |
+  Delete unreferenced CDN SHA prefixes from Azure Blob Storage, keeping the
+  current latest SHA and the last N stable SHAs recorded in blob storage.
+
+inputs:
+  cdn_account_name:
+    description: "Azure Storage account name."
+    required: true
+  cdn_container:
+    description: "Azure Blob container name."
+    required: true
+  cdn_sas_token:
+    description: "Azure Blob Storage SAS token."
+    required: true
+  cdn_namespace:
+    description: "Optional path namespace. Use 'none' or leave empty for no namespace."
+    required: false
+    default: ""
+  repo_name:
+    description: "Repository / application name segment in the CDN path."
+    required: true
+  latest_sha:
+    description: "Current latest SHA to protect from deletion."
+    required: true
+  keep_stable:
+    description: "Number of stable SHAs to keep in the rolling history."
+    required: false
+    default: "5"
+
+runs:
+  using: composite
+  steps:
+    - run: bash "${{ github.action_path }}/cdn-cleanup.sh"
+      shell: bash
+      env:
+        CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
+        CDN_CONTAINER: ${{ inputs.cdn_container }}
+        CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
+        CDN_NAMESPACE: ${{ inputs.cdn_namespace }}
+        REPO_NAME: ${{ inputs.repo_name }}
+        LATEST_SHA: ${{ inputs.latest_sha }}
+        KEEP_STABLE: ${{ inputs.keep_stable }}

@@ -1,0 +1,83 @@
+name: "CDN rewrite static assets"
+description: |
+  Rewrite relative asset URLs in a static dist/ directory to point at an
+  immutable CDN path. This is meant to run before uploading to Azure Blob
+  Storage or similar object storage.
+
+inputs:
+  enabled:
+    description: "Set to 'true' to run the rewrite. Defaults to 'false' so callers must opt in."
+    required: false
+    default: "false"
+  cdn_base_url:
+    description: "CDN origin domain, e.g. https://<name>.azurefd.net"
+    required: true
+  cdn_namespace:
+    description: "Optional path namespace between the domain and repo name. Use 'none' or leave empty for no namespace."
+    required: false
+    default: ""
+  repo_name:
+    description: "Repository / application name segment in the CDN path."
+    required: true
+  short_sha:
+    description: "Short commit SHA used as the immutable asset folder."
+    required: true
+  asset_extensions:
+    description: "Comma-separated list of asset extensions to rewrite."
+    required: false
+    default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,woff,woff2,ttf,otf,eot"
+  dist_dir:
+    description: "Directory containing the built static assets."
+    required: false
+    default: "dist"
+  custom_rewrite_script:
+    description: |
+      Optional path to a custom rewrite script relative to the caller repo root.
+      If provided and enabled is 'true', this script runs instead of the
+      built-in rewrite. It receives the environment variables: CDN_URL,
+      EXT_PATTERN, DIST_DIR, CDN_BASE_URL, CDN_NAMESPACE, REPO_NAME, SHORT_SHA,
+      and ASSET_EXTENSIONS.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Rewrite asset URLs for CDN upload
+      if: inputs.enabled == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ -n "${CUSTOM_REWRITE_SCRIPT}" ]; then
+          case "${CUSTOM_REWRITE_SCRIPT}" in
+            /*|*..*)
+              echo "ERROR: custom_rewrite_script must be a relative path within the workspace" >&2
+              exit 1
+              ;;
+          esac
+        fi
+
+        CDN_NAMESPACE="${CDN_NAMESPACE:-}"
+        [ "$CDN_NAMESPACE" = "none" ] && CDN_NAMESPACE=""
+        if [ -n "$CDN_NAMESPACE" ]; then
+          CDN_URL="${CDN_BASE_URL%/}/${CDN_NAMESPACE}/${REPO_NAME}/${SHORT_SHA}"
+        else
+          CDN_URL="${CDN_BASE_URL%/}/${REPO_NAME}/${SHORT_SHA}"
+        fi
+        EXT_PATTERN="${ASSET_EXTENSIONS//,/|}"
+        export CDN_URL EXT_PATTERN
+
+        if [ -n "${CUSTOM_REWRITE_SCRIPT}" ]; then
+          bash "${CUSTOM_REWRITE_SCRIPT}"
+        else
+          bash "${{ github.action_path }}/cdn-rewrite-dist.sh"
+        fi
+      env:
+        CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+        CDN_NAMESPACE: ${{ inputs.cdn_namespace }}
+        REPO_NAME: ${{ inputs.repo_name }}
+        SHORT_SHA: ${{ inputs.short_sha }}
+        ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+        DIST_DIR: ${{ inputs.dist_dir }}
+        CUSTOM_REWRITE_SCRIPT: ${{ inputs.custom_rewrite_script }}
