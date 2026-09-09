@@ -16,6 +16,10 @@ inputs:
     description: "Optional path namespace between the domain and repo name. Use 'none' or leave empty for no namespace."
     required: false
     default: ""
+  cdn_container:
+    description: "Azure Blob container name. Needed so the rewritten URLs match the upload prefix when the container name equals the repo name (SHA at container root)."
+    required: false
+    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
@@ -40,9 +44,29 @@ inputs:
     required: false
     default: ""
 
+outputs:
+  cdn_url:
+    description: "Resolved CDN URL used for the rewrite (empty when enabled is not 'true')."
+    value: ${{ steps.prefix.outputs.cdn_url }}
+  destination_prefix:
+    description: "Blob prefix matching cdn_url, for passing to cdn-upload's destination_prefix."
+    value: ${{ steps.prefix.outputs.destination_prefix }}
+
 runs:
   using: composite
   steps:
+    # Path convention is owned by cdn-resolve-prefix so rewrite URLs, upload
+    # prefixes, and cleanup feeds can never diverge.
+    - id: prefix
+      if: inputs.enabled == 'true'
+      uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
+      with:
+        cdn_namespace: ${{ inputs.cdn_namespace }}
+        cdn_container: ${{ inputs.cdn_container }}
+        repo_name: ${{ inputs.repo_name }}
+        short_sha: ${{ inputs.short_sha }}
+        cdn_base_url: ${{ inputs.cdn_base_url }}
+
     - name: Rewrite asset URLs for CDN upload
       if: inputs.enabled == 'true'
       shell: bash
@@ -58,13 +82,6 @@ runs:
           esac
         fi
 
-        CDN_NAMESPACE="${CDN_NAMESPACE:-}"
-        [ "$CDN_NAMESPACE" = "none" ] && CDN_NAMESPACE=""
-        if [ -n "$CDN_NAMESPACE" ]; then
-          CDN_URL="${CDN_BASE_URL%/}/${CDN_NAMESPACE}/${REPO_NAME}/${SHORT_SHA}"
-        else
-          CDN_URL="${CDN_BASE_URL%/}/${REPO_NAME}/${SHORT_SHA}"
-        fi
         EXT_PATTERN="${ASSET_EXTENSIONS//,/|}"
         export CDN_URL EXT_PATTERN
 
@@ -74,6 +91,7 @@ runs:
           bash "${{ github.action_path }}/cdn-rewrite-dist.sh"
         fi
       env:
+        CDN_URL: ${{ steps.prefix.outputs.cdn_url }}
         CDN_BASE_URL: ${{ inputs.cdn_base_url }}
         CDN_NAMESPACE: ${{ inputs.cdn_namespace }}
         REPO_NAME: ${{ inputs.repo_name }}

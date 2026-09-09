@@ -4,23 +4,18 @@ set -euo pipefail
 
 CDN_ACCOUNT_NAME="${CDN_ACCOUNT_NAME:?CDN_ACCOUNT_NAME is required}"
 CDN_CONTAINER="${CDN_CONTAINER:?CDN_CONTAINER is required}"
-CDN_NAMESPACE="${CDN_NAMESPACE:-}"
-[ "$CDN_NAMESPACE" = "none" ] && CDN_NAMESPACE=""
-REPO_NAME="${REPO_NAME:?REPO_NAME is required}"
+# BLOB_PREFIX is resolved by the cdn-stable-history action via
+# cdn-resolve-prefix (empty string = SHAs live at the container root).
+if [ -z "${BLOB_PREFIX+x}" ]; then
+  echo "ERROR: BLOB_PREFIX must be set (empty string allowed); run via the cdn-stable-history action" >&2
+  exit 1
+fi
 STABLE_SHA="${STABLE_SHA:?STABLE_SHA is required}"
 KEEP_STABLE="${KEEP_STABLE:-5}"
 
 if [ -n "${CDN_SAS_TOKEN:-}" ]; then
   export AZURE_STORAGE_ACCOUNT="$CDN_ACCOUNT_NAME"
   export AZURE_STORAGE_SAS_TOKEN="$CDN_SAS_TOKEN"
-fi
-
-if [ -n "$CDN_NAMESPACE" ]; then
-  BLOB_PREFIX="${CDN_NAMESPACE}/${REPO_NAME}"
-elif [ "$CDN_CONTAINER" = "$REPO_NAME" ]; then
-  BLOB_PREFIX=""
-else
-  BLOB_PREFIX="${REPO_NAME}"
 fi
 
 HISTORY_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-history"

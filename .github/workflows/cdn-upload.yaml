@@ -61,6 +61,7 @@ jobs:
           ASSET_EXTS: ${{ inputs.asset_extensions }}
           PREFIX: ${{ inputs.destination_prefix }}
           CACHE_CONTROL: ${{ inputs.cache_control }}
+          DIST_DIR: ${{ inputs.dist_dir }}
         with:
           inlineScript: |
             set -euo pipefail
@@ -70,7 +71,7 @@ jobs:
               exit 0
             fi
 
-            SRC_DIR="${{ inputs.dist_dir }}"
+            SRC_DIR="${DIST_DIR}"
             if [ ! -d "${SRC_DIR}" ]; then
               echo "::error::No dist dir ${SRC_DIR}; nothing to upload." >&2
               exit 1

@@ -1,0 +1,75 @@
+name: "CDN resolve prefix"
+description: |
+  Resolve the CDN path convention shared by cdn-rewrite, cdn-upload,
+  cdn-cleanup, and cdn-stable-history. Single source of truth for the
+  namespace/repo/container/sha path so all consumers agree on where assets
+  live and under which URL they are referenced.
+
+inputs:
+  cdn_namespace:
+    description: "Optional path namespace. Use 'none' or leave empty for no namespace."
+    required: false
+    default: ""
+  cdn_container:
+    description: "Azure Blob container name. When it equals repo_name (and no namespace), the SHA sits at the container root."
+    required: false
+    default: ""
+  repo_name:
+    description: "Repository / application name segment in the CDN path."
+    required: true
+  short_sha:
+    description: "Short commit SHA used as the immutable asset folder. Omit when only blob_prefix is needed."
+    required: false
+    default: ""
+  cdn_base_url:
+    description: "CDN origin URL including the container path (e.g. https://<name>.azurefd.net/<container>). Required only for the cdn_url output."
+    required: false
+    default: ""
+
+outputs:
+  blob_prefix:
+    description: "Path inside the container before the SHA (ns/repo, repo, or empty)."
+    value: ${{ steps.resolve.outputs.blob_prefix }}
+  destination_prefix:
+    description: "Blob prefix this run's assets live under (blob_prefix/<sha>, or just <sha>). Empty when short_sha was not provided."
+    value: ${{ steps.resolve.outputs.destination_prefix }}
+  cdn_url:
+    description: "Full CDN URL for this run's assets (cdn_base_url + destination_prefix). Empty when short_sha or cdn_base_url was not provided."
+    value: ${{ steps.resolve.outputs.cdn_url }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        CDN_NAMESPACE: ${{ inputs.cdn_namespace }}
+        CDN_CONTAINER: ${{ inputs.cdn_container }}
+        REPO_NAME: ${{ inputs.repo_name }}
+        SHORT_SHA: ${{ inputs.short_sha }}
+        CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+      run: |
+        set -euo pipefail
+
+        ns="${CDN_NAMESPACE:-}"
+        [ "$ns" = "none" ] && ns=""
+        if [ -n "$ns" ]; then
+          blob_prefix="${ns}/${REPO_NAME}"
+        elif [ -n "$CDN_CONTAINER" ] && [ "$CDN_CONTAINER" = "$REPO_NAME" ]; then
+          blob_prefix=""
+        else
+          blob_prefix="${REPO_NAME}"
+        fi
+
+        destination_prefix=""
+        cdn_url=""
+        if [ -n "${SHORT_SHA}" ]; then
+          destination_prefix="${blob_prefix:+$blob_prefix/}${SHORT_SHA}"
+          if [ -n "${CDN_BASE_URL}" ]; then
+            cdn_url="${CDN_BASE_URL%/}/${destination_prefix}"
+          fi
+        fi
+
+        echo "blob_prefix=${blob_prefix}" >> "$GITHUB_OUTPUT"
+        echo "destination_prefix=${destination_prefix}" >> "$GITHUB_OUTPUT"
+        echo "cdn_url=${cdn_url}" >> "$GITHUB_OUTPUT"

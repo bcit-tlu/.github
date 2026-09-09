@@ -2,11 +2,9 @@
 # Rewrite asset URLs in dist/ for CDN upload and verify the rewrite succeeded.
 set -euo pipefail
 
-CDN_BASE_URL="${CDN_BASE_URL:?CDN_BASE_URL is required}"
-CDN_NAMESPACE="${CDN_NAMESPACE:-}"
-[ "$CDN_NAMESPACE" = "none" ] && CDN_NAMESPACE=""
-REPO_NAME="${REPO_NAME:?REPO_NAME is required}"
-SHORT_SHA="${SHORT_SHA:?SHORT_SHA is required}"
+# CDN_URL is resolved by the cdn-rewrite action via cdn-resolve-prefix so the
+# path convention stays identical to cdn-upload/cdn-cleanup.
+CDN_URL="${CDN_URL:?CDN_URL is required}"
 ASSET_EXTENSIONS="${ASSET_EXTENSIONS:?ASSET_EXTENSIONS is required}"
 DIST_DIR="${DIST_DIR:-dist}"
 
@@ -16,11 +14,6 @@ if [[ "$ASSET_EXTENSIONS" =~ [^a-zA-Z0-9,] ]]; then
   exit 1
 fi
 
-if [ -n "$CDN_NAMESPACE" ]; then
-  CDN_URL="${CDN_BASE_URL%/}/${CDN_NAMESPACE}/${REPO_NAME}/${SHORT_SHA}"
-else
-  CDN_URL="${CDN_BASE_URL%/}/${REPO_NAME}/${SHORT_SHA}"
-fi
 EXT_PATTERN="${ASSET_EXTENSIONS//,/|}"
 export CDN_URL EXT_PATTERN
 
