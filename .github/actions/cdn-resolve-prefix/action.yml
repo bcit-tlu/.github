@@ -46,6 +46,11 @@ runs:
       run: |
         set -euo pipefail
 
+        if [ -n "${CDN_BASE_URL}" ] && [[ ! "${CDN_BASE_URL}" =~ ^https?:// ]]; then
+          echo "ERROR: cdn_base_url must include the scheme (got '${CDN_BASE_URL}'); schemeless values rewrite assets to relative URLs which browsers resolve against the CDN path, corrupting them" >&2
+          exit 1
+        fi
+
         ns="${CDN_NAMESPACE:-}"
         [ "$ns" = "none" ] && ns=""
         # Convention: assets always live under <repo>/<sha> (or <ns>/<repo>/<sha>)
