@@ -37,7 +37,6 @@ runs:
       uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
       with:
         cdn_namespace: ${{ inputs.cdn_namespace }}
-        cdn_container: ${{ inputs.cdn_container }}
         repo_name: ${{ inputs.repo_name }}
 
     - run: bash "${{ github.action_path }}/cdn-cleanup.sh"

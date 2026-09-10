@@ -16,10 +16,6 @@ inputs:
     description: "Optional path namespace between the domain and repo name. Use 'none' or leave empty for no namespace."
     required: false
     default: ""
-  cdn_container:
-    description: "Azure Blob container name. Needed so the rewritten URLs match the upload prefix when the container name equals the repo name (SHA at container root)."
-    required: false
-    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
@@ -62,7 +58,6 @@ runs:
       uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
       with:
         cdn_namespace: ${{ inputs.cdn_namespace }}
-        cdn_container: ${{ inputs.cdn_container }}
         repo_name: ${{ inputs.repo_name }}
         short_sha: ${{ inputs.short_sha }}
         cdn_base_url: ${{ inputs.cdn_base_url }}

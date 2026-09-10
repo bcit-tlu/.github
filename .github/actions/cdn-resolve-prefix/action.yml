@@ -10,10 +10,6 @@ inputs:
     description: "Optional path namespace. Use 'none' or leave empty for no namespace."
     required: false
     default: ""
-  cdn_container:
-    description: "Azure Blob container name. When it equals repo_name (and no namespace), the SHA sits at the container root."
-    required: false
-    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
@@ -44,7 +40,6 @@ runs:
       shell: bash
       env:
         CDN_NAMESPACE: ${{ inputs.cdn_namespace }}
-        CDN_CONTAINER: ${{ inputs.cdn_container }}
         REPO_NAME: ${{ inputs.repo_name }}
         SHORT_SHA: ${{ inputs.short_sha }}
         CDN_BASE_URL: ${{ inputs.cdn_base_url }}
@@ -53,10 +48,10 @@ runs:
 
         ns="${CDN_NAMESPACE:-}"
         [ "$ns" = "none" ] && ns=""
+        # Convention: assets always live under <repo>/<sha> (or <ns>/<repo>/<sha>)
+        # so the URL path shape is identical for dedicated and shared containers.
         if [ -n "$ns" ]; then
           blob_prefix="${ns}/${REPO_NAME}"
-        elif [ -n "$CDN_CONTAINER" ] && [ "$CDN_CONTAINER" = "$REPO_NAME" ]; then
-          blob_prefix=""
         else
           blob_prefix="${REPO_NAME}"
         fi

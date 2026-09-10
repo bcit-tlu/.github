@@ -5,7 +5,7 @@ set -euo pipefail
 CDN_ACCOUNT_NAME="${CDN_ACCOUNT_NAME:?CDN_ACCOUNT_NAME is required}"
 CDN_CONTAINER="${CDN_CONTAINER:?CDN_CONTAINER is required}"
 # BLOB_PREFIX is resolved by the cdn-stable-history action via
-# cdn-resolve-prefix (empty string = SHAs live at the container root).
+# cdn-resolve-prefix (<repo>, or <ns>/<repo> when namespaced).
 if [ -z "${BLOB_PREFIX+x}" ]; then
   echo "ERROR: BLOB_PREFIX must be set (empty string allowed); run via the cdn-stable-history action" >&2
   exit 1
