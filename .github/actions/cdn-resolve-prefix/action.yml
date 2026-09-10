@@ -24,10 +24,10 @@ inputs:
 
 outputs:
   blob_prefix:
-    description: "Path inside the container before the SHA (ns/repo, repo, or empty)."
+    description: "Path inside the container before the SHA (ns/repo or repo)."
     value: ${{ steps.resolve.outputs.blob_prefix }}
   destination_prefix:
-    description: "Blob prefix this run's assets live under (blob_prefix/<sha>, or just <sha>). Empty when short_sha was not provided."
+    description: "Blob prefix this run's assets live under (blob_prefix/<sha>)."
     value: ${{ steps.resolve.outputs.destination_prefix }}
   cdn_url:
     description: "Full CDN URL for this run's assets (cdn_base_url + destination_prefix). Empty when short_sha or cdn_base_url was not provided."

@@ -7,7 +7,7 @@ CDN_CONTAINER="${CDN_CONTAINER:?CDN_CONTAINER is required}"
 # BLOB_PREFIX is resolved by the cdn-stable-history action via
 # cdn-resolve-prefix (<repo>, or <ns>/<repo> when namespaced).
 if [ -z "${BLOB_PREFIX+x}" ]; then
-  echo "ERROR: BLOB_PREFIX must be set (empty string allowed); run via the cdn-stable-history action" >&2
+  echo "ERROR: BLOB_PREFIX must be set; run via the cdn-stable-history action" >&2
   exit 1
 fi
 STABLE_SHA="${STABLE_SHA:?STABLE_SHA is required}"
