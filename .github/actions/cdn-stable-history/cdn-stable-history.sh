@@ -13,6 +13,13 @@ fi
 STABLE_SHA="${STABLE_SHA:?STABLE_SHA is required}"
 KEEP_STABLE="${KEEP_STABLE:-5}"
 
+# Enforce a hard minimum of 5 so callers cannot shrink the protection window
+# below a safe floor.
+if [ "$KEEP_STABLE" -lt 5 ] 2>/dev/null; then
+  echo "::warning::keep_stable=${KEEP_STABLE} is below the minimum of 5; clamping to 5"
+  KEEP_STABLE=5
+fi
+
 if [ -n "${CDN_SAS_TOKEN:-}" ]; then
   export AZURE_STORAGE_ACCOUNT="$CDN_ACCOUNT_NAME"
   export AZURE_STORAGE_SAS_TOKEN="$CDN_SAS_TOKEN"
@@ -95,5 +102,17 @@ if ! az storage blob upload \
   --name "$HISTORY_BLOB" \
   --overwrite; then
   echo "ERROR: failed to upload updated history blob ${HISTORY_BLOB}" >&2
+  exit 1
+fi
+
+# Write the .stable-current pointer so cleanup deterministically protects
+# the SHA the stable environment is currently serving.
+echo "$STABLE_SHA" > "$TMP"
+if ! az storage blob upload \
+  --container-name "$CDN_CONTAINER" \
+  --file "$TMP" \
+  --name "${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-current" \
+  --overwrite; then
+  echo "ERROR: failed to upload .stable-current pointer" >&2
   exit 1
 fi

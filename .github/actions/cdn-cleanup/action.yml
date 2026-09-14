@@ -1,7 +1,8 @@
 name: "CDN cleanup old SHA prefixes"
 description: |
-  Delete unreferenced CDN SHA prefixes from Azure Blob Storage, keeping the
-  current latest SHA and the last N stable SHAs recorded in blob storage.
+  Delete unreferenced CDN SHA prefixes from Azure Blob Storage. A SHA is
+  protected if it appears in .latest-current, .latest-history, .stable-current,
+  .stable-history, or is the current run SHA.
 
 inputs:
   cdn_account_name:
@@ -21,10 +22,14 @@ inputs:
     description: "Repository / application name segment in the CDN path."
     required: true
   latest_sha:
-    description: "Current latest SHA to protect from deletion."
+    description: "Current latest SHA; written to .latest-current and .latest-history."
     required: true
   keep_stable:
-    description: "Number of stable SHAs to keep in the rolling history."
+    description: "Number of stable release SHAs protected via the .stable-history journal. Minimum 5."
+    required: false
+    default: "5"
+  keep_recent:
+    description: "Number of latest SHAs kept in the .latest-history journal (rollout-lag + rollback window). Minimum 5."
     required: false
     default: "5"
 
@@ -48,3 +53,4 @@ runs:
         BLOB_PREFIX: ${{ steps.prefix.outputs.blob_prefix }}
         LATEST_SHA: ${{ inputs.latest_sha }}
         KEEP_STABLE: ${{ inputs.keep_stable }}
+        KEEP_RECENT: ${{ inputs.keep_recent }}

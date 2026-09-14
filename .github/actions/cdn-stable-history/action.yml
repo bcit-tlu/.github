@@ -25,7 +25,7 @@ inputs:
     description: "Stable release SHA to add to the history."
     required: true
   keep_stable:
-    description: "Number of stable SHAs to keep."
+    description: "Number of stable SHAs to keep. Minimum 5."
     required: false
     default: "5"
 
