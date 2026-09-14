@@ -26,9 +26,15 @@ on:
         required: true
         type: string
       cdn_container:
-        description: "Azure Blob container name"
-        required: true
+        description: "Azure Blob container name. Defaults to repo_name (one container per repo)."
+        required: false
         type: string
+        default: ""
+      repo_name:
+        description: "Repository / application name; used as the container name when cdn_container is empty."
+        required: false
+        type: string
+        default: ""
       cache_control:
         description: "Cache-Control header for uploaded blobs"
         required: false
@@ -57,7 +63,7 @@ jobs:
         env:
           SAS_TOKEN: ${{ secrets.CDN_SAS_TOKEN }}
           CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
-          CDN_CONTAINER: ${{ inputs.cdn_container }}
+          CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
           ASSET_EXTS: ${{ inputs.asset_extensions }}
           PREFIX: ${{ inputs.destination_prefix }}
           CACHE_CONTROL: ${{ inputs.cache_control }}

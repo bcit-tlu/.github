@@ -9,15 +9,12 @@ inputs:
     description: "Azure Storage account name."
     required: true
   cdn_container:
-    description: "Azure Blob container name."
-    required: true
+    description: "Azure Blob container name. Defaults to repo_name (one container per repo)."
+    required: false
+    default: ""
   cdn_sas_token:
     description: "Azure Blob Storage SAS token."
     required: true
-  cdn_namespace:
-    description: "Optional path namespace. Use 'none' or leave empty for no namespace."
-    required: false
-    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
@@ -41,14 +38,13 @@ runs:
     - id: prefix
       uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
       with:
-        cdn_namespace: ${{ inputs.cdn_namespace }}
         repo_name: ${{ inputs.repo_name }}
 
     - run: bash "${{ github.action_path }}/cdn-cleanup.sh"
       shell: bash
       env:
         CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
-        CDN_CONTAINER: ${{ inputs.cdn_container }}
+        CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
         CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
         BLOB_PREFIX: ${{ steps.prefix.outputs.blob_prefix }}
         LATEST_SHA: ${{ inputs.latest_sha }}

@@ -2,14 +2,10 @@ name: "CDN resolve prefix"
 description: |
   Resolve the CDN path convention shared by cdn-rewrite, cdn-upload,
   cdn-cleanup, and cdn-stable-history. Single source of truth for the
-  namespace/repo/container/sha path so all consumers agree on where assets
+  container/repo/sha path so all consumers agree on where assets
   live and under which URL they are referenced.
 
 inputs:
-  cdn_namespace:
-    description: "Optional path namespace. Use 'none' or leave empty for no namespace."
-    required: false
-    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
@@ -24,7 +20,7 @@ inputs:
 
 outputs:
   blob_prefix:
-    description: "Path inside the container before the SHA (ns/repo or repo)."
+    description: "Path inside the container before the SHA (repo)."
     value: ${{ steps.resolve.outputs.blob_prefix }}
   destination_prefix:
     description: "Blob prefix this run's assets live under (blob_prefix/<sha>)."
@@ -39,7 +35,6 @@ runs:
     - id: resolve
       shell: bash
       env:
-        CDN_NAMESPACE: ${{ inputs.cdn_namespace }}
         REPO_NAME: ${{ inputs.repo_name }}
         SHORT_SHA: ${{ inputs.short_sha }}
         CDN_BASE_URL: ${{ inputs.cdn_base_url }}
@@ -51,15 +46,9 @@ runs:
           exit 1
         fi
 
-        ns="${CDN_NAMESPACE:-}"
-        [ "$ns" = "none" ] && ns=""
-        # Convention: assets always live under <repo>/<sha> (or <ns>/<repo>/<sha>)
-        # so the URL path shape is identical for dedicated and shared containers.
-        if [ -n "$ns" ]; then
-          blob_prefix="${ns}/${REPO_NAME}"
-        else
-          blob_prefix="${REPO_NAME}"
-        fi
+        # Convention: assets always live under <repo>/<sha>; one container per
+        # repo keeps apps separated without extra path segments.
+        blob_prefix="${REPO_NAME}"
 
         destination_prefix=""
         cdn_url=""
