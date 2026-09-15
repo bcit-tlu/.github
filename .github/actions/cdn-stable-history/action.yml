@@ -29,19 +29,11 @@ inputs:
 runs:
   using: composite
   steps:
-    # Path convention is owned by cdn-resolve-prefix so the history blob sits
-    # next to the asset prefixes cdn-upload wrote.
-    - id: prefix
-      uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
-      with:
-        repo_name: ${{ inputs.repo_name }}
-
     - run: bash "${{ github.action_path }}/cdn-stable-history.sh"
       shell: bash
       env:
         CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
         CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
         CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
-        BLOB_PREFIX: ${{ steps.prefix.outputs.blob_prefix }}
         STABLE_SHA: ${{ inputs.stable_sha }}
         KEEP_STABLE: ${{ inputs.keep_stable }}

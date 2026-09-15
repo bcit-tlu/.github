@@ -33,20 +33,12 @@ inputs:
 runs:
   using: composite
   steps:
-    # Path convention is owned by cdn-resolve-prefix so cleanup protects and
-    # deletes exactly the prefixes cdn-upload wrote.
-    - id: prefix
-      uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
-      with:
-        repo_name: ${{ inputs.repo_name }}
-
     - run: bash "${{ github.action_path }}/cdn-cleanup.sh"
       shell: bash
       env:
         CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
         CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
         CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
-        BLOB_PREFIX: ${{ steps.prefix.outputs.blob_prefix }}
         LATEST_SHA: ${{ inputs.latest_sha }}
         KEEP_STABLE: ${{ inputs.keep_stable }}
         KEEP_RECENT: ${{ inputs.keep_recent }}

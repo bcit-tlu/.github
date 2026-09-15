@@ -4,12 +4,6 @@ set -euo pipefail
 
 CDN_ACCOUNT_NAME="${CDN_ACCOUNT_NAME:?CDN_ACCOUNT_NAME is required}"
 CDN_CONTAINER="${CDN_CONTAINER:?CDN_CONTAINER is required}"
-# BLOB_PREFIX is resolved by the cdn-stable-history action via
-# cdn-resolve-prefix (<repo>, or <ns>/<repo> when namespaced).
-if [ -z "${BLOB_PREFIX+x}" ]; then
-  echo "ERROR: BLOB_PREFIX must be set; run via the cdn-stable-history action" >&2
-  exit 1
-fi
 STABLE_SHA="${STABLE_SHA:?STABLE_SHA is required}"
 KEEP_STABLE="${KEEP_STABLE:-5}"
 
@@ -25,8 +19,8 @@ if [ -n "${CDN_SAS_TOKEN:-}" ]; then
   export AZURE_STORAGE_SAS_TOKEN="$CDN_SAS_TOKEN"
 fi
 
-HISTORY_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-history"
-LOCK_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-history.lock"
+HISTORY_BLOB=".stable-history"
+LOCK_BLOB=".stable-history.lock"
 TMP=$(mktemp)
 EMPTY=$(mktemp)
 trap 'rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
@@ -111,7 +105,7 @@ echo "$STABLE_SHA" > "$TMP"
 if ! az storage blob upload \
   --container-name "$CDN_CONTAINER" \
   --file "$TMP" \
-  --name "${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-current" \
+  --name ".stable-current" \
   --overwrite; then
   echo "ERROR: failed to upload .stable-current pointer" >&2
   exit 1

@@ -9,12 +9,6 @@ set -euo pipefail
 
 CDN_ACCOUNT_NAME="${CDN_ACCOUNT_NAME:?CDN_ACCOUNT_NAME is required}"
 CDN_CONTAINER="${CDN_CONTAINER:?CDN_CONTAINER is required}"
-# BLOB_PREFIX is resolved by the cdn-cleanup action via cdn-resolve-prefix
-# (<repo>, or <ns>/<repo> when namespaced).
-if [ -z "${BLOB_PREFIX+x}" ]; then
-  echo "ERROR: BLOB_PREFIX must be set; run via the cdn-cleanup action" >&2
-  exit 1
-fi
 LATEST_SHA="${LATEST_SHA:?LATEST_SHA is required}"
 KEEP_STABLE="${KEEP_STABLE:-5}"
 KEEP_RECENT="${KEEP_RECENT:-5}"
@@ -35,10 +29,10 @@ if [ -n "${CDN_SAS_TOKEN:-}" ]; then
   export AZURE_STORAGE_SAS_TOKEN="$CDN_SAS_TOKEN"
 fi
 
-STABLE_HISTORY_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-history"
-LATEST_HISTORY_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.latest-history"
-LATEST_CURRENT_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.latest-current"
-STABLE_CURRENT_BLOB="${BLOB_PREFIX:+$BLOB_PREFIX/}.stable-current"
+STABLE_HISTORY_BLOB=".stable-history"
+LATEST_HISTORY_BLOB=".latest-history"
+LATEST_CURRENT_BLOB=".latest-current"
+STABLE_CURRENT_BLOB=".stable-current"
 TMP=$(mktemp)
 LIST_TMP=$(mktemp)
 HIST_TMP=$(mktemp)
@@ -132,21 +126,15 @@ fi
 
 echo "Protected SHAs: ${protected[*]}"
 
-list_prefix="${BLOB_PREFIX:+$BLOB_PREFIX/}"
+# List all top-level SHA prefixes in the container.
 if ! az storage blob list \
   --container-name "$CDN_CONTAINER" \
-  --prefix "$list_prefix" \
-  --query "[?starts_with(name, '${list_prefix}')].name" -o tsv > "$LIST_TMP" 2>/dev/null; then
-  echo "ERROR: failed to list blobs under ${list_prefix}" >&2
+  --query "[].name" -o tsv > "$LIST_TMP" 2>/dev/null; then
+  echo "ERROR: failed to list blobs in container ${CDN_CONTAINER}" >&2
   exit 1
 fi
 
-mapfile -t all_shas < <(
-  cat "$LIST_TMP" \
-    | sed "s#^${list_prefix}##" \
-    | cut -d'/' -f1 \
-    | sort -u
-)
+mapfile -t all_shas < <(cut -d'/' -f1 "$LIST_TMP" | sort -u)
 
 fail=0
 for sha in "${all_shas[@]}"; do
@@ -161,10 +149,9 @@ for sha in "${all_shas[@]}"; do
   fi
 
   echo "DELETE $sha"
-  delete_pattern="${BLOB_PREFIX:+$BLOB_PREFIX/}$sha/*"
   if ! az storage blob delete-batch \
     --source "$CDN_CONTAINER" \
-    --pattern "$delete_pattern" >/dev/null; then
+    --pattern "$sha/*" >/dev/null; then
     echo "ERROR: failed to delete $sha" >&2
     fail=1
   fi

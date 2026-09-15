@@ -1,16 +1,15 @@
 name: "CDN resolve prefix"
 description: |
-  Resolve the CDN path convention shared by cdn-rewrite, cdn-upload,
-  cdn-cleanup, and cdn-stable-history. Single source of truth for the
-  container/repo/sha path so all consumers agree on where assets
-  live and under which URL they are referenced.
+  Resolve the CDN path convention shared by cdn-rewrite and cdn-upload.
+  Single source of truth for the layout: one container per repo, blobs at
+  <sha>/ inside it, public URLs at /<repo>/<sha>/.
 
 inputs:
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
   short_sha:
-    description: "Short commit SHA used as the immutable asset folder. Omit when only blob_prefix is needed."
+    description: "Short commit SHA used as the immutable asset folder."
     required: false
     default: ""
   cdn_base_url:
@@ -19,14 +18,11 @@ inputs:
     default: ""
 
 outputs:
-  blob_prefix:
-    description: "Path inside the container before the SHA (repo)."
-    value: ${{ steps.resolve.outputs.blob_prefix }}
   destination_prefix:
-    description: "Blob prefix this run's assets live under (blob_prefix/<sha>)."
+    description: "Blob prefix this run's assets live under (<sha>)."
     value: ${{ steps.resolve.outputs.destination_prefix }}
   cdn_url:
-    description: "Full CDN URL for this run's assets (cdn_base_url + destination_prefix). Empty when short_sha or cdn_base_url was not provided."
+    description: "Full public CDN URL for this run's assets (cdn_base_url/<repo>/<sha>). Empty when short_sha or cdn_base_url was not provided."
     value: ${{ steps.resolve.outputs.cdn_url }}
 
 runs:
@@ -46,19 +42,20 @@ runs:
           exit 1
         fi
 
-        # Convention: assets always live under <repo>/<sha>; one container per
-        # repo keeps apps separated without extra path segments.
-        blob_prefix="${REPO_NAME}"
+        # Convention: one container per repo; blobs live directly under
+        # <sha>/ inside it. Front Door maps the public /<repo>/<sha>/ path to
+        # the container (catch-all pass-through for the communal account, or a
+        # per-repo route origin path for dedicated accounts).
 
         destination_prefix=""
         cdn_url=""
         if [ -n "${SHORT_SHA}" ]; then
-          destination_prefix="${blob_prefix:+$blob_prefix/}${SHORT_SHA}"
+          destination_prefix="${SHORT_SHA}"
+          url_prefix="${REPO_NAME}/${SHORT_SHA}"
           if [ -n "${CDN_BASE_URL}" ]; then
-            cdn_url="${CDN_BASE_URL%/}/${destination_prefix}"
+            cdn_url="${CDN_BASE_URL%/}/${url_prefix}"
           fi
         fi
 
-        echo "blob_prefix=${blob_prefix}" >> "$GITHUB_OUTPUT"
         echo "destination_prefix=${destination_prefix}" >> "$GITHUB_OUTPUT"
         echo "cdn_url=${cdn_url}" >> "$GITHUB_OUTPUT"
