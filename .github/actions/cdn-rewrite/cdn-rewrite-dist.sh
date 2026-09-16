@@ -46,9 +46,10 @@ find "$DIST_DIR" -type f -name '*.html' | while read -r f; do
       return join q{/}, @out;
     };
 
-    my $pat = qr{(src|href|data-src)\s*=\s*(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2}i;
+    my $pat = qr{(src|href|data-src)\s*=\s*(?:(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2|([^\s"\x27=<>`]+\.(?:$exts)(?:[#?][^\s"\x27<>`]*)?))}i;
     s{$pat}{
-      my ($attr, $q, $path) = ($1, $2, $3);
+      my ($attr, $q, $path) = ($1, $2, defined $3 ? $3 : $4);
+      $q = q{"} unless defined $q;
       $path =~ s{^\s+|\s+$}{}g;
       if ($path =~ m{://} || ($cdn ne q{} && index($path, $cdn) == 0) || $path =~ m{^(?:[a-zA-Z][a-zA-Z0-9+.+-]*:|//)}) {
         "$attr=$q$path$q";
@@ -189,7 +190,7 @@ missing_files=$(find "$DIST_DIR"/ -type f \( -name '*.html' -o -name '*.css' -o 
     exit 0 unless $cdn && $exts;
     open my $fh, q{<}, $file or exit 0;
     my $content = do { local $/; <$fh> };
-    my $html_pat = qr{(src|href|data-src)\s*=\s*(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2}i;
+    my $html_pat = qr{(src|href|data-src)\s*=\s*(?:(["\x27])([^"\x27]+\.(?:$exts)(?:[#?][^"\x27]*)?)\2|([^\s"\x27=<>`]+\.(?:$exts)(?:[#?][^\s"\x27<>`]*)?))}i;
     my $css_url_pat = qr{url\(\s*(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\s*\)}i;
     my $css_import_pat = qr{\@import\s+(?:url\()?(["\x27]?)([^"\x27\)]+\.(?:$exts)(?:[#?][^"\x27\)]*)?)\1\)?}i;
     my $js_pat = qr{(["\x27])([^"\x27]+?\.(?:$exts)(?:[#?][^"\x27]*)?)\1}i;

@@ -2,7 +2,7 @@ name: "CDN rewrite static assets"
 description: |
   Rewrite relative asset URLs in a static dist/ directory to point at an
   immutable CDN path. This is meant to run before uploading to Azure Blob
-  Storage or similar object storage.
+  Storage or similar object storage. Behavioural test: cdn-rewrite-dist.test.sh.
 
 inputs:
   enabled:
