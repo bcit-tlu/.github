@@ -20,6 +20,15 @@ CHANNEL="${CHANNEL:-}"
 KEEP_STABLE="${KEEP_STABLE:-5}"
 KEEP_RECENT="${KEEP_RECENT:-5}"
 
+# Reject unknown channels: anything non-'stable' below writes .latest-* pointers, so a typo would silently pollute the wrong account's journals.
+case "${CHANNEL}" in
+  ""|latest|stable) ;;
+  *)
+    echo "ERROR: CHANNEL must be 'latest', 'stable', or empty (got '${CHANNEL}')" >&2
+    exit 1
+    ;;
+esac
+
 # Enforce a hard minimum of 5 so callers cannot shrink the protection window
 # below a safe floor.
 if [ "$KEEP_STABLE" -lt 5 ] 2>/dev/null; then

@@ -2,8 +2,7 @@
 # Rewrite asset URLs in dist/ for CDN upload and verify the rewrite succeeded.
 set -euo pipefail
 
-# CDN_URL is resolved by the cdn-rewrite action via cdn-resolve-prefix so the
-# path convention stays identical to cdn-upload/cdn-cleanup.
+# CDN_URL is resolved by the cdn-rewrite action using the cdn-resolve-prefix convention (keep in sync), so paths stay identical to cdn-upload/cdn-cleanup.
 CDN_URL="${CDN_URL:?CDN_URL is required}"
 ASSET_EXTENSIONS="${ASSET_EXTENSIONS:?ASSET_EXTENSIONS is required}"
 DIST_DIR="${DIST_DIR:-dist}"

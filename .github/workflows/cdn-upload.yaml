@@ -17,10 +17,11 @@ on:
         required: true
         type: string
       asset_extensions:
+        # Keep this a superset of the cdn-build-assets/cdn-rewrite default: files rewritten but not uploaded 404 on the CDN.
         description: "Comma-separated list of file extensions to upload"
         required: false
         type: string
-        default: "jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,css,js,map"
+        default: "jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot,css,js,map"
       cdn_account_name:
         description: "Azure Storage account name"
         required: true
@@ -104,18 +105,27 @@ jobs:
             set -euo pipefail
 
             AUTH_ARGS=()
-            if [ "${AUTH_MODE}" = "oidc" ]; then
-              AUTH_ARGS+=(--auth-mode login)
-            elif [ -n "${SAS_TOKEN:-}" ]; then
-              AUTH_ARGS+=(--sas-token "${SAS_TOKEN}")
-            else
-              echo "::warning::CDN upload config incomplete (missing SAS_TOKEN/AZURE_* or CDN_ACCOUNT_NAME/CDN_CONTAINER); skipping upload."
-              exit 0
-            fi
+            case "${AUTH_MODE}" in
+              oidc)
+                AUTH_ARGS+=(--auth-mode login)
+                ;;
+              sas)
+                if [ -z "${SAS_TOKEN:-}" ]; then
+                  echo "::error::auth_mode=sas requires the CDN_SAS_TOKEN secret" >&2
+                  exit 1
+                fi
+                AUTH_ARGS+=(--sas-token "${SAS_TOKEN}")
+                ;;
+              *)
+                echo "::error::unknown auth_mode '${AUTH_MODE}' (expected 'sas' or 'oidc')" >&2
+                exit 1
+                ;;
+            esac
 
+            # Never green-skip an upload job: missing config is a caller bug, and downstream deployments gate on this job having published assets.
             if [ -z "${CDN_ACCOUNT_NAME:-}" ] || [ -z "${CDN_CONTAINER:-}" ]; then
-              echo "::warning::CDN upload config incomplete (missing CDN_ACCOUNT_NAME/CDN_CONTAINER); skipping upload."
-              exit 0
+              echo "::error::CDN upload requires cdn_account_name and cdn_container (or repo_name)" >&2
+              exit 1
             fi
 
             SRC_DIR="${DIST_DIR}"

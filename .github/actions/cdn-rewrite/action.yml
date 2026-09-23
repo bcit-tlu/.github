@@ -47,15 +47,34 @@ outputs:
 runs:
   using: composite
   steps:
-    # Path convention is owned by cdn-resolve-prefix so rewrite URLs, upload
-    # prefixes, and cleanup feeds can never diverge.
+    # Inline copy of the cdn-resolve-prefix convention (keep the two in sync) — no live @main reference, so pinned callers get pinned behaviour.
     - id: prefix
       if: inputs.enabled == 'true'
-      uses: bcit-tlu/.github/.github/actions/cdn-resolve-prefix@main
-      with:
-        repo_name: ${{ inputs.repo_name }}
-        short_sha: ${{ inputs.short_sha }}
-        cdn_base_url: ${{ inputs.cdn_base_url }}
+      shell: bash
+      env:
+        REPO_NAME: ${{ inputs.repo_name }}
+        SHORT_SHA: ${{ inputs.short_sha }}
+        CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "${CDN_BASE_URL}" ] && [[ ! "${CDN_BASE_URL}" =~ ^https?:// ]]; then
+          echo "ERROR: cdn_base_url must include the scheme (got '${CDN_BASE_URL}'); schemeless values rewrite assets to relative URLs which browsers resolve against the CDN path, corrupting them" >&2
+          exit 1
+        fi
+
+        destination_prefix=""
+        cdn_url=""
+        if [ -n "${SHORT_SHA}" ]; then
+          destination_prefix="${SHORT_SHA}"
+          url_prefix="${REPO_NAME}/${SHORT_SHA}"
+          if [ -n "${CDN_BASE_URL}" ]; then
+            cdn_url="${CDN_BASE_URL%/}/${url_prefix}"
+          fi
+        fi
+
+        echo "destination_prefix=${destination_prefix}" >> "$GITHUB_OUTPUT"
+        echo "cdn_url=${cdn_url}" >> "$GITHUB_OUTPUT"
 
     - name: Rewrite asset URLs for CDN upload
       if: inputs.enabled == 'true'
