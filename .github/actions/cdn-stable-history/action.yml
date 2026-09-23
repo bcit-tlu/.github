@@ -13,8 +13,9 @@ inputs:
     required: false
     default: ""
   cdn_sas_token:
-    description: "Azure Blob Storage SAS token."
-    required: true
+    description: "Azure Blob Storage SAS token. Leave empty when the job uses azure/login (OIDC) — the script falls back to --auth-mode login."
+    required: false
+    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true

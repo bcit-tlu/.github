@@ -4,6 +4,12 @@ description: |
   protected if it appears in .latest-current, .latest-history, .stable-current,
   .stable-history, or is the current run SHA.
 
+  With per-channel storage accounts (e.g. bcitcdnlatest / bcitcdnstable), the
+  caller picks the account via cdn_account_name and passes channel so the
+  right pointer blobs are maintained: 'latest' also writes the .latest-*
+  pointers; 'stable' only reads pointers (cdn-stable-history owns stable
+  pointer writes). Empty channel preserves the legacy single-container mode.
+
 inputs:
   cdn_account_name:
     description: "Azure Storage account name."
@@ -12,15 +18,25 @@ inputs:
     description: "Azure Blob container name. Defaults to repo_name (one container per repo)."
     required: false
     default: ""
+  channel:
+    description: "CDN channel (latest or stable). Controls which pointer blobs are written."
+    required: false
+    default: ""
   cdn_sas_token:
-    description: "Azure Blob Storage SAS token."
-    required: true
+    description: "Azure Blob Storage SAS token. Leave empty when the job uses azure/login (OIDC) — the script falls back to --auth-mode login."
+    required: false
+    default: ""
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
+  sha:
+    description: "SHA this channel is now serving; always protected from deletion."
+    required: false
+    default: ""
   latest_sha:
-    description: "Current latest SHA; written to .latest-current and .latest-history."
-    required: true
+    description: "Legacy alias for sha (kept for existing callers)."
+    required: false
+    default: ""
   keep_stable:
     description: "Number of stable release SHAs protected via the .stable-history journal. Minimum 5."
     required: false
@@ -38,7 +54,8 @@ runs:
       env:
         CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
         CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
+        CHANNEL: ${{ inputs.channel }}
         CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
-        LATEST_SHA: ${{ inputs.latest_sha }}
+        SERVE_SHA: ${{ inputs.sha || inputs.latest_sha }}
         KEEP_STABLE: ${{ inputs.keep_stable }}
         KEEP_RECENT: ${{ inputs.keep_recent }}

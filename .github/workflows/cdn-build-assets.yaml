@@ -1,0 +1,113 @@
+name: CDN Build Assets
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build (empty = triggering commit; set to the release tag for stable-channel builds)."
+        required: false
+        type: string
+        default: ""
+      repo_name:
+        description: "Repository / application name segment in the CDN path."
+        required: true
+        type: string
+      cdn_base_url:
+        description: "CDN endpoint base URL baked into the rewritten asset URLs (per-channel hostname)."
+        required: true
+        type: string
+      artifact_name:
+        description: "Artifact name for the rewritten dist upload."
+        required: false
+        type: string
+        default: "dist"
+      dist_dir:
+        description: "Directory containing the built static assets."
+        required: false
+        type: string
+        default: "dist"
+      build_command:
+        description: |
+          Custom build command replacing the default `npm ci && npm run build`
+          (e.g. `make dist`, `hugo --minify -d dist`, or a nix-shell invocation).
+          The caller repo's toolchain must be reachable from this command — if
+          the repo has a shell.nix or flake.nix, Nix is installed automatically.
+        required: false
+        type: string
+        default: ""
+      asset_extensions:
+        description: "Comma-separated list of file extensions to rewrite for CDN."
+        required: false
+        type: string
+        default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,woff,woff2,ttf,otf,eot"
+      node_version:
+        description: "Node.js version for the build."
+        required: false
+        type: string
+        default: "24"
+      custom_rewrite_script:
+        description: "Optional path to a custom rewrite script (forwarded to cdn-rewrite)."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      short_sha:
+        description: "Short commit SHA (7 chars) of the built ref — the CDN blob prefix."
+        value: ${{ jobs.build.outputs.short_sha }}
+      destination_prefix:
+        description: "Blob prefix for cdn-upload's destination_prefix."
+        value: ${{ jobs.build.outputs.destination_prefix }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      short_sha: ${{ steps.set-sha.outputs.short_sha }}
+      destination_prefix: ${{ steps.cdn-rewrite.outputs.destination_prefix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v6
+        if: inputs.build_command == ''
+        with:
+          node-version: ${{ inputs.node_version }}
+      - run: npm ci
+        if: inputs.build_command == ''
+      - run: npm run build
+        if: inputs.build_command == ''
+
+      # Custom toolchain: install Nix when the caller repo carries a shell.nix
+      # or flake.nix so build_command can use nix-shell/nix develop.
+      - name: Install Nix
+        if: inputs.build_command != '' && hashFiles('shell.nix', 'flake.nix') != ''
+        uses: cachix/install-nix-action@v31
+
+      - name: Build assets
+        if: inputs.build_command != ''
+        run: ${{ inputs.build_command }}
+      - id: set-sha
+        # Pin --short=7 to match helm-publish's injected cdn.commitSha —
+        # auto-abbrev length varies with clone size and would desync the two.
+        run: echo "short_sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Rewrites asset URLs and emits destination_prefix (resolved by the
+      # shared cdn-resolve-prefix action) for the cdn-upload job.
+      - name: Rewrite asset URLs for CDN upload
+        id: cdn-rewrite
+        uses: bcit-tlu/.github/.github/actions/cdn-rewrite@main
+        with:
+          enabled: "true"
+          cdn_base_url: ${{ inputs.cdn_base_url }}
+          repo_name: ${{ inputs.repo_name }}
+          short_sha: ${{ steps.set-sha.outputs.short_sha }}
+          asset_extensions: ${{ inputs.asset_extensions }}
+          dist_dir: ${{ inputs.dist_dir }}
+          custom_rewrite_script: ${{ inputs.custom_rewrite_script }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.dist_dir }}/

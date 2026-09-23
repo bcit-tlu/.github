@@ -14,9 +14,13 @@ if [ "$KEEP_STABLE" -lt 5 ] 2>/dev/null; then
   KEEP_STABLE=5
 fi
 
+export AZURE_STORAGE_ACCOUNT="$CDN_ACCOUNT_NAME"
+AUTH_ARGS=()
 if [ -n "${CDN_SAS_TOKEN:-}" ]; then
-  export AZURE_STORAGE_ACCOUNT="$CDN_ACCOUNT_NAME"
   export AZURE_STORAGE_SAS_TOKEN="$CDN_SAS_TOKEN"
+else
+  # No SAS token — assume the job authenticated via azure/login (OIDC UAMI).
+  AUTH_ARGS+=(--auth-mode login)
 fi
 
 HISTORY_BLOB=".stable-history"
@@ -29,6 +33,7 @@ trap 'rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
 # releases from reading the same history and then overwriting each other.
 lock_exists_output=$(az storage blob exists \
   --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
   --name "$LOCK_BLOB" \
   --query exists -o tsv 2>/dev/null)
 lock_exists_exit=$?
@@ -39,6 +44,7 @@ fi
 if [ "$lock_exists_output" != "true" ]; then
   if ! az storage blob upload \
     --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
     --file "$EMPTY" \
     --name "$LOCK_BLOB" >/dev/null 2>/dev/null; then
     echo "ERROR: failed to create history lock blob ${LOCK_BLOB}" >&2
@@ -48,6 +54,7 @@ fi
 
 lease_id=$(az storage blob lease acquire \
   --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
   --blob-name "$LOCK_BLOB" \
   --lease-duration 60 \
   --query leaseId -o tsv 2>/dev/null) || {
@@ -58,6 +65,7 @@ lease_id=$(az storage blob lease acquire \
 release_lock() {
   az storage blob lease release \
     --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
     --blob-name "$LOCK_BLOB" \
     --lease-id "$lease_id" >/dev/null 2>&1 || true
 }
@@ -67,6 +75,7 @@ trap 'release_lock; rm -f "$TMP" "${TMP}.new" "$EMPTY"' EXIT
 # outage does not cause us to drop the history.
 history_exists_output=$(az storage blob exists \
   --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
   --name "$HISTORY_BLOB" \
   --query exists -o tsv 2>/dev/null)
 history_exists_exit=$?
@@ -77,6 +86,7 @@ fi
 if [ "$history_exists_output" = "true" ]; then
   if ! az storage blob download \
     --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
     --name "$HISTORY_BLOB" \
     --file "$TMP" 2>/dev/null; then
     echo "ERROR: failed to download existing history blob ${HISTORY_BLOB}" >&2
@@ -92,6 +102,7 @@ fi
 
 if ! az storage blob upload \
   --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
   --file "${TMP}.new" \
   --name "$HISTORY_BLOB" \
   --overwrite; then
@@ -104,6 +115,7 @@ fi
 echo "$STABLE_SHA" > "$TMP"
 if ! az storage blob upload \
   --container-name "$CDN_CONTAINER" \
+  "${AUTH_ARGS[@]}" \
   --file "$TMP" \
   --name ".stable-current" \
   --overwrite; then

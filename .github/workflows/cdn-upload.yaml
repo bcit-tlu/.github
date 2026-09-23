@@ -40,16 +40,38 @@ on:
         required: false
         type: string
         default: "public, max-age=31536000, immutable"
+      auth_mode:
+        description: "Blob auth mode: 'sas' uses CDN_SAS_TOKEN; 'oidc' uses azure/login with the AZURE_* secrets and --auth-mode login."
+        required: false
+        type: string
+        default: "sas"
+      environment:
+        description: "GitHub Environment the upload job runs under; the Azure federated credential subject is repo:...:environment:<this value>. Empty means no environment (legacy SAS callers)."
+        required: false
+        type: string
+        default: ""
     secrets:
       CDN_SAS_TOKEN:
-        description: "Azure Blob Storage SAS token"
-        required: true
+        description: "Azure Blob Storage SAS token (required when auth_mode is 'sas')"
+        required: false
+      AZURE_CLIENT_ID:
+        description: "Client ID of the managed identity (required when auth_mode is 'oidc')"
+        required: false
+      AZURE_TENANT_ID:
+        description: "Entra ID tenant ID (required when auth_mode is 'oidc')"
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        description: "Azure subscription ID (required when auth_mode is 'oidc')"
+        required: false
 
 jobs:
   upload:
     runs-on: ubuntu-latest
+    # Caller jobs may not set environment themselves, so it arrives as an input and is applied here.
+    environment: ${{ inputs.environment }}
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Download build artifact
         if: inputs.artifact_name != ''
@@ -58,10 +80,19 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.dist_dir }}
 
+      - name: Azure login (OIDC)
+        if: inputs.auth_mode == 'oidc'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Upload assets to Azure Blob Storage
         uses: azure/cli@v3
         env:
           SAS_TOKEN: ${{ secrets.CDN_SAS_TOKEN }}
+          AUTH_MODE: ${{ inputs.auth_mode }}
           CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
           CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
           ASSET_EXTS: ${{ inputs.asset_extensions }}
@@ -72,8 +103,18 @@ jobs:
           inlineScript: |
             set -euo pipefail
 
-            if [ -z "${SAS_TOKEN:-}" ] || [ -z "${CDN_ACCOUNT_NAME:-}" ] || [ -z "${CDN_CONTAINER:-}" ]; then
-              echo "::warning::CDN upload config incomplete (missing SAS_TOKEN/CDN_ACCOUNT_NAME/CDN_CONTAINER); skipping upload."
+            AUTH_ARGS=()
+            if [ "${AUTH_MODE}" = "oidc" ]; then
+              AUTH_ARGS+=(--auth-mode login)
+            elif [ -n "${SAS_TOKEN:-}" ]; then
+              AUTH_ARGS+=(--sas-token "${SAS_TOKEN}")
+            else
+              echo "::warning::CDN upload config incomplete (missing SAS_TOKEN/AZURE_* or CDN_ACCOUNT_NAME/CDN_CONTAINER); skipping upload."
+              exit 0
+            fi
+
+            if [ -z "${CDN_ACCOUNT_NAME:-}" ] || [ -z "${CDN_CONTAINER:-}" ]; then
+              echo "::warning::CDN upload config incomplete (missing CDN_ACCOUNT_NAME/CDN_CONTAINER); skipping upload."
               exit 0
             fi
 
@@ -95,7 +136,7 @@ jobs:
               echo "  - Uploading assets matching pattern: ${pattern}"
               az storage blob upload-batch \
                 --account-name "${CDN_ACCOUNT_NAME}" \
-                --sas-token "${SAS_TOKEN}" \
+                "${AUTH_ARGS[@]}" \
                 --destination "${CDN_CONTAINER}" \
                 --destination-path "${PREFIX}" \
                 --source "${SRC_DIR}" \
