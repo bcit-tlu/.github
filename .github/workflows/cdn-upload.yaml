@@ -144,6 +144,23 @@ jobs:
             echo "Uploading assets from ${SRC_DIR} to container ${CDN_CONTAINER} at prefix ${PREFIX}"
             echo "Using asset extensions: ${ASSET_EXTS}"
 
+            # Guard: an empty local match means .by-commit would point at a prefix this run never published (or at stale blobs from an earlier run).
+            match_count=0
+            OLD_IFS="$IFS"
+            IFS=','
+            for ext in ${ASSET_EXTS}; do
+              ext_trim="$(printf '%s' "$ext" | xargs)"
+              [ -z "${ext_trim}" ] && continue
+              n=$(find "${SRC_DIR}" -type f -name "*.${ext_trim}" | wc -l)
+              match_count=$((match_count + n))
+            done
+            IFS="${OLD_IFS}"
+            if [ "${match_count}" -eq 0 ]; then
+              echo "::error::Upload matched no local files in ${SRC_DIR} — check asset_extensions and the dist artifact contents."
+              exit 1
+            fi
+            echo "Matched ${match_count} local files."
+
             OLD_IFS="$IFS"
             IFS=','
             for ext in ${ASSET_EXTS}; do
@@ -162,19 +179,6 @@ jobs:
                 --content-cache-control "${CACHE_CONTROL}"
             done
             IFS="${OLD_IFS}"
-
-            # Guard: an empty prefix would let .by-commit point at nothing and fail confusingly at release time.
-            uploaded_count=$(az storage blob list \
-              --account-name "${CDN_ACCOUNT_NAME}" \
-              "${AUTH_ARGS[@]}" \
-              --container-name "${CDN_CONTAINER}" \
-              --prefix "${PREFIX}/" \
-              --num-results 1 \
-              --query "length(@)" -o tsv)
-            if [ "${uploaded_count}" = "0" ]; then
-              echo "::error::Upload matched no files under ${PREFIX}/ — check asset_extensions and the dist artifact contents."
-              exit 1
-            fi
             echo "CDN upload complete."
 
             # Commit→content-ref lookup: release jobs read .by-commit/<sha> to find which prefix to promote without rebuilding.
