@@ -1,15 +1,12 @@
 name: "CDN resolve prefix"
-description: |
-  Resolve the CDN path convention shared by cdn-rewrite and cdn-upload.
-  Single source of truth for the layout: one container per repo, blobs at
-  <sha>/ inside it, public URLs at /<repo>/<sha>/.
+description: "Resolve the CDN path convention shared by cdn-upload and cdn-promote. Single source of truth for the layout: one container per repo, blobs at <ref>/ inside it, public URLs at /<repo>/<ref>/ — where <ref> is the content-addressed build hash (hex)."
 
 inputs:
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
-  short_sha:
-    description: "Short commit SHA used as the immutable asset folder."
+  content_ref:
+    description: "Content ref (dist content hash) used as the immutable asset folder."
     required: false
     default: ""
   cdn_base_url:
@@ -19,10 +16,10 @@ inputs:
 
 outputs:
   destination_prefix:
-    description: "Blob prefix this run's assets live under (<sha>)."
+    description: "Blob prefix this run's assets live under (<ref>)."
     value: ${{ steps.resolve.outputs.destination_prefix }}
   cdn_url:
-    description: "Full public CDN URL for this run's assets (cdn_base_url/<repo>/<sha>). Empty when short_sha or cdn_base_url was not provided."
+    description: "Full public CDN URL for this run's assets (cdn_base_url/<repo>/<ref>). Empty when no ref or cdn_base_url was provided."
     value: ${{ steps.resolve.outputs.cdn_url }}
 
 runs:
@@ -32,7 +29,7 @@ runs:
       shell: bash
       env:
         REPO_NAME: ${{ inputs.repo_name }}
-        SHORT_SHA: ${{ inputs.short_sha }}
+        CONTENT_REF: ${{ inputs.content_ref }}
         CDN_BASE_URL: ${{ inputs.cdn_base_url }}
       run: |
         set -euo pipefail
@@ -42,16 +39,14 @@ runs:
           exit 1
         fi
 
-        # Convention: one container per repo; blobs live directly under
-        # <sha>/ inside it. Front Door maps the public /<repo>/<sha>/ path to
-        # the container (catch-all pass-through for the communal account, or a
-        # per-repo route origin path for dedicated accounts).
+        # Convention: one container per repo; blobs live directly under <ref>/ inside it.
+        # Front Door maps the public /<repo>/<ref>/ path to the container (catch-all pass-through for the communal account, or a per-repo route origin path for dedicated accounts).
 
         destination_prefix=""
         cdn_url=""
-        if [ -n "${SHORT_SHA}" ]; then
-          destination_prefix="${SHORT_SHA}"
-          url_prefix="${REPO_NAME}/${SHORT_SHA}"
+        if [ -n "${CONTENT_REF}" ]; then
+          destination_prefix="${CONTENT_REF}"
+          url_prefix="${REPO_NAME}/${CONTENT_REF}"
           if [ -n "${CDN_BASE_URL}" ]; then
             cdn_url="${CDN_BASE_URL%/}/${url_prefix}"
           fi

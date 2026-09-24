@@ -1,0 +1,27 @@
+name: "CDN verify static assets"
+description: "Verify a built dist/ is safe to publish unchanged at /<repo>/<ref>/ on any CDN channel endpoint — replaces the old upload-side rewrite so identical bytes can be promoted latest→stable by server-side copy. Fails on root-absolute asset refs (src=\"/x.css\", url(/x.png), \"/y.js\"), relative refs whose ../ segments escape the dist root, and baked CDN hostnames (any azurefd.net host, or cdn_base_url when given)."
+
+inputs:
+  cdn_base_url:
+    description: "Channel CDN base URL (e.g. https://<name>.azurefd.net). Checked as a literal — its presence in dist/ means a host was baked in. Optional; azurefd.net hosts are always flagged."
+    required: false
+    default: ""
+  asset_extensions:
+    description: "Comma-separated list of asset extensions to check."
+    required: false
+    default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,woff,woff2,ttf,otf,eot"
+  dist_dir:
+    description: "Directory containing the built static assets."
+    required: false
+    default: "dist"
+
+runs:
+  using: composite
+  steps:
+    - name: Verify dist asset references are host-agnostic
+      shell: bash
+      run: bash "${{ github.action_path }}/cdn-verify-dist.sh"
+      env:
+        CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+        ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+        DIST_DIR: ${{ inputs.dist_dir }}

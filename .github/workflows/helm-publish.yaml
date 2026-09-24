@@ -1,13 +1,9 @@
-# Reusable workflow: package, push, and cosign-sign a Helm chart to an OCI
-# registry.
+# Reusable workflow: package, push, and cosign-sign a Helm chart to an OCI registry.
 #
 # Two version modes:
-#   * RC publish (from ci.yaml): pass `version` directly (e.g. the
-#     oci-build rc_version). Empty `version` = nothing to publish → skip.
-#   * Release publish (from a `release: published` workflow): pass
-#     `tag_name` + `tag_prefix`; the tag is parsed to a semver `version`.
-#     A tag that doesn't match the prefix is skipped (useful for monorepo
-#     matrices where only one component's tag matches).
+#   * RC publish (from ci.yaml): pass `version` directly (e.g. the oci-build rc_version). Empty `version` = nothing to publish → skip.
+#   * Release publish (from a `release: published` workflow): pass `tag_name` + `tag_prefix`; the tag is parsed to a semver `version`.
+#     A tag that doesn't match the prefix is skipped (useful for monorepo matrices where only one component's tag matches).
 #
 # RC caller (single chart, sugar-suite ci.yaml):
 #
@@ -22,7 +18,7 @@
 #     with:
 #       chart_dir: charts
 #       version: ${{ needs.build-sugar-suite.outputs.rc_version }}
-#       inject_cdn_sha: true
+#       cdn_content_ref: ${{ needs.build-assets.outputs.content_hash }}
 #     secrets: inherit
 #
 # Release caller (monorepo matrix, hriv helm-publish.yaml):
@@ -73,11 +69,11 @@ on:
         required: false
         type: string
         default: ""
-      inject_cdn_sha:
-        description: "Inject the short commit SHA into <chart_dir>/values.yaml `cdn.commitSha` before packaging."
+      cdn_content_ref:
+        description: "Content ref (dist content hash from cdn-build-assets / cdn-promote) injected into `cdn.contentRef` before packaging — the chart pins the tested bytes. Empty = no injection (non-CDN charts)."
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: ""
       update_dependencies:
         description: "Run `helm dependency update` before packaging (charts with subchart deps)."
         required: false
@@ -105,8 +101,7 @@ jobs:
       # Decide what version to publish (and whether to publish at all):
       #   * explicit `version` wins (RC publishes from ci.yaml);
       #   * otherwise parse the semver out of `tag_name` using `tag_prefix`;
-      #   * a non-matching tag sets publish=false so the rest of the job is
-      #     skipped (lets monorepo matrices no-op on other components' tags).
+      #   * a non-matching tag sets publish=false so the rest of the job is skipped (lets monorepo matrices no-op on other components' tags).
       - name: Resolve version
         id: resolve
         shell: bash
@@ -127,8 +122,7 @@ jobs:
             echo "::warning::No version input and tag '${TAG}' does not match prefix '${PREFIX}' — nothing published (expected in monorepo matrices for other components' tags; otherwise check tag_prefix)."
           fi
 
-      # Check out the exact ref being published (release tag for releases,
-      # triggering commit for RC publishes) so the packaged chart matches it.
+      # Check out the exact ref being published (release tag for releases, triggering commit for RC publishes) so the packaged chart matches it.
       - uses: actions/checkout@v7
         if: steps.resolve.outputs.publish == 'true'
         with:
@@ -168,15 +162,14 @@ jobs:
             -u "${ACTOR}" \
             --password-stdin
 
-      # Package the chart at the resolved version, push it to the OCI registry,
-      # then keyless-sign the pushed digest with cosign.
+      # Package the chart at the resolved version, push it to the OCI registry, then keyless-sign the pushed digest with cosign.
       - name: Package, push & sign chart
         if: steps.resolve.outputs.publish == 'true'
         shell: bash
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
           CHART_DIR: ${{ inputs.chart_dir }}
-          INJECT_CDN_SHA: ${{ inputs.inject_cdn_sha }}
+          CDN_CONTENT_REF: ${{ inputs.cdn_content_ref }}
           UPDATE_DEPS: ${{ inputs.update_dependencies }}
           OCI_BASE: oci://${{ env.REGISTRY }}/${{ github.repository }}/charts
           IMAGE_BASE: ${{ env.REGISTRY }}/${{ github.repository }}/charts
@@ -187,16 +180,12 @@ jobs:
           DEST_DIR="/tmp/charts"
           mkdir -p "${DEST_DIR}"
 
-          # Inject short commit SHA for CDN immutable path (matched by upload prefix).
-          # Pin --short=7: auto-abbreviation length varies with clone depth
-          # (this job is shallow, oci-build checks out full history).
-          if [[ "${INJECT_CDN_SHA}" == "true" ]]; then
-            SHORT_SHA="$(git rev-parse --short=7 HEAD)"
-            yq -i ".cdn.commitSha = \"${SHORT_SHA}\"" "${CHART_DIR}/values.yaml"
+          # Inject the CDN content ref (dist content hash, matched by the upload prefix) into values.yaml so the chart pins the tested bytes.
+          if [[ -n "${CDN_CONTENT_REF}" ]]; then
+            yq -i ".cdn.contentRef = \"${CDN_CONTENT_REF}\"" "${CHART_DIR}/values.yaml"
           fi
 
-          # Fail loudly on dependency-resolution errors — packaging with stale
-          # vendored subcharts after a failed update would publish a bad chart.
+          # Fail loudly on dependency-resolution errors — packaging with stale vendored subcharts after a failed update would publish a bad chart.
           if [[ "${UPDATE_DEPS}" == "true" ]]; then
             helm dependency update "${CHART_DIR}"
           fi

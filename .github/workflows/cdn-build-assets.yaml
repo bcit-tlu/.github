@@ -1,0 +1,161 @@
+name: CDN Build Assets
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build (empty = triggering commit; set to the release tag for stable-channel builds)."
+        required: false
+        type: string
+        default: ""
+      repo_name:
+        description: "Repository / application name segment in the CDN path."
+        required: true
+        type: string
+      cdn_base_url:
+        description: "CDN endpoint base URL for this channel. Assets are no longer rewritten — this is only used by cdn-verify to detect accidentally embedded channel hostnames."
+        required: false
+        type: string
+        default: ""
+      artifact_name:
+        description: "Artifact name for the dist upload."
+        required: false
+        type: string
+        default: "dist"
+      dist_dir:
+        description: "Directory containing the built static assets."
+        required: false
+        type: string
+        default: "dist"
+      build_command:
+        description: "Custom build command replacing the default `npm ci && npm run build` (e.g. `make dist`, `hugo --minify -d dist`, or a nix-shell invocation). The caller repo's toolchain must be reachable from this command — if the repo has a shell.nix or flake.nix, Nix is installed automatically."
+        required: false
+        type: string
+        default: ""
+      asset_extensions:
+        description: "Comma-separated list of file extensions that get uploaded to the CDN. The content hash covers exactly this set — files outside it never reach the CDN and don't affect the ref."
+        required: false
+        type: string
+        default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot"
+      node_version:
+        description: "Node.js version for the build."
+        required: false
+        type: string
+        default: "24"
+    outputs:
+      commit_sha:
+        description: "Full commit SHA of the built ref — the .by-commit/<sha> lookup key written by cdn-upload."
+        value: ${{ jobs.build.outputs.commit_sha }}
+      content_hash:
+        description: "Content hash of the uploaded file set — the CDN blob prefix and the value charts pin."
+        value: ${{ jobs.build.outputs.content_hash }}
+      destination_prefix:
+        description: "Blob prefix for cdn-upload's destination_prefix (identical to content_hash)."
+        value: ${{ jobs.build.outputs.destination_prefix }}
+      asset_extensions:
+        description: "Resolved extension filter; pass to cdn-upload's asset_extensions so the hash and upload filters can never drift."
+        value: ${{ jobs.build.outputs.asset_extensions }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      commit_sha: ${{ steps.set-sha.outputs.commit_sha }}
+      content_hash: ${{ steps.content-hash.outputs.content_hash }}
+      destination_prefix: ${{ steps.content-hash.outputs.content_hash }}
+      asset_extensions: ${{ steps.set-sha.outputs.asset_extensions }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          # build_command runs caller-controlled code; do not leave the contents:read job token in .git/config for it to pick up.
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        if: inputs.build_command == ''
+        with:
+          node-version: ${{ inputs.node_version }}
+      - run: npm ci
+        if: inputs.build_command == ''
+      - run: npm run build
+        if: inputs.build_command == ''
+
+      # Custom toolchain: install Nix when the caller repo carries a shell.nix or flake.nix so build_command can use nix-shell/nix develop.
+      - name: Install Nix
+        if: inputs.build_command != '' && hashFiles('shell.nix', 'flake.nix') != ''
+        uses: cachix/install-nix-action@v31
+
+      - name: Build assets
+        if: inputs.build_command != ''
+        run: ${{ inputs.build_command }}
+      - id: set-sha
+        # The full commit SHA is the .by-commit/<sha> lookup key cdn-upload writes; the CDN prefix itself is the content hash below.
+        run: |
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "asset_extensions=${ASSET_EXTENSIONS}" >> "$GITHUB_OUTPUT"
+        env:
+          ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+
+      # Content-addressed prefix: hash the (path, bytes) pairs of exactly the file set cdn-upload publishes.
+      # Identical asset content → identical ref, so promotion to stable is a server-side blob copy with no rebuild.
+      - name: Compute content hash
+        id: content-hash
+        env:
+          ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+          DIST_DIR: ${{ inputs.dist_dir }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${ASSET_EXTENSIONS}" =~ [^a-zA-Z0-9,] ]]; then
+            echo "::error::asset_extensions contains invalid characters: ${ASSET_EXTENSIONS}"
+            exit 1
+          fi
+          if [ ! -d "${DIST_DIR}" ]; then
+            echo "::error::No dist dir ${DIST_DIR}; nothing to hash."
+            exit 1
+          fi
+
+          pred=()
+          IFS=',' read -ra exts <<< "${ASSET_EXTENSIONS}"
+          for ext in "${exts[@]}"; do
+            ext_trim="$(printf '%s' "$ext" | xargs)"
+            [ -z "${ext_trim}" ] && continue
+            pred+=(-o -name "*.${ext_trim}")
+          done
+          if [ ${#pred[@]} -eq 0 ]; then
+            echo "::error::asset_extensions resolved to an empty set"
+            exit 1
+          fi
+
+          # Hash "sha256  relpath" lines; paths are relative so the hash is independent of the dist directory's own name.
+          mapfile -d '' files < <(cd "${DIST_DIR}" && find . -type f \( "${pred[@]:1}" \) -print0 | sort -z)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No files in ${DIST_DIR} match asset_extensions (${ASSET_EXTENSIONS}) — an empty upload would produce a ref pointing at nothing."
+            exit 1
+          fi
+          content_hash=$(cd "${DIST_DIR}" && printf '%s\0' "${files[@]}" | xargs -0 sha256sum | sha256sum | cut -c1-12)
+          echo "content_hash=${content_hash}" >> "$GITHUB_OUTPUT"
+          echo "Content hash (${DIST_DIR}, ${#files[@]} files matching ${ASSET_EXTENSIONS}): ${content_hash}"
+
+      # Load shared actions at the ref the caller pinned this workflow to (uses: rejects expressions, so `uses: .../cdn-verify@main` would silently track main even for tagged/SHA-pinned callers).
+      - name: Check out shared actions at the pinned workflow ref
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .github-workflow
+          persist-credentials: false
+
+      # Gate: fail the build if dist/ still contains refs that only resolve on the origin host (root-absolute paths, ../ escaping the prefix) or any baked channel hostname — either would break byte-identical promotion.
+      - name: Verify dist is host-agnostic
+        uses: ./.github-workflow/.github/actions/cdn-verify
+        with:
+          cdn_base_url: ${{ inputs.cdn_base_url }}
+          asset_extensions: ${{ inputs.asset_extensions }}
+          dist_dir: ${{ inputs.dist_dir }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.dist_dir }}/
