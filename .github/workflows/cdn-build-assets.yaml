@@ -36,7 +36,7 @@ on:
         description: "Comma-separated list of file extensions that get uploaded to the CDN. The content hash covers exactly this set — files outside it never reach the CDN and don't affect the ref."
         required: false
         type: string
-        default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,woff,woff2,ttf,otf,eot"
+        default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot"
       node_version:
         description: "Node.js version for the build."
         required: false
@@ -129,16 +129,14 @@ jobs:
           fi
 
           # Hash "sha256  relpath" lines; paths are relative so the hash is independent of the dist directory's own name.
-          content_hash=$(
-            cd "${DIST_DIR}" \
-              && find . -type f \( "${pred[@]:1}" \) -print0 \
-              | sort -z \
-              | xargs -0 sha256sum \
-              | sha256sum \
-              | cut -c1-12
-          )
+          mapfile -d '' files < <(cd "${DIST_DIR}" && find . -type f \( "${pred[@]:1}" \) -print0 | sort -z)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No files in ${DIST_DIR} match asset_extensions (${ASSET_EXTENSIONS}) — an empty upload would produce a ref pointing at nothing."
+            exit 1
+          fi
+          content_hash=$(cd "${DIST_DIR}" && printf '%s\0' "${files[@]}" | xargs -0 sha256sum | sha256sum | cut -c1-12)
           echo "content_hash=${content_hash}" >> "$GITHUB_OUTPUT"
-          echo "Content hash (${DIST_DIR}, filtered to ${ASSET_EXTENSIONS}): ${content_hash}"
+          echo "Content hash (${DIST_DIR}, ${#files[@]} files matching ${ASSET_EXTENSIONS}): ${content_hash}"
 
       # Load shared actions at the ref the caller pinned this workflow to (uses: rejects expressions, so `uses: .../cdn-verify@main` would silently track main even for tagged/SHA-pinned callers).
       - name: Check out shared actions at the pinned workflow ref

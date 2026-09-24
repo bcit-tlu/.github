@@ -23,10 +23,11 @@ on:
         default: ""
       asset_extensions:
         # Keep this identical to the cdn-build-assets filter: the content hash covers exactly this set — a file hashed but not uploaded (or vice versa) breaks the ref↔bytes correspondence.
+        # Callers should pass cdn-build-assets's asset_extensions output rather than overriding this.
         description: "Comma-separated list of file extensions to upload"
         required: false
         type: string
-        default: "jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot,css,js,map"
+        default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot"
       cdn_account_name:
         description: "Azure Storage account name"
         required: true
@@ -161,6 +162,19 @@ jobs:
                 --content-cache-control "${CACHE_CONTROL}"
             done
             IFS="${OLD_IFS}"
+
+            # Guard: an empty prefix would let .by-commit point at nothing and fail confusingly at release time.
+            uploaded_count=$(az storage blob list \
+              --account-name "${CDN_ACCOUNT_NAME}" \
+              "${AUTH_ARGS[@]}" \
+              --container-name "${CDN_CONTAINER}" \
+              --prefix "${PREFIX}/" \
+              --num-results 1 \
+              --query "length(@)" -o tsv)
+            if [ "${uploaded_count}" = "0" ]; then
+              echo "::error::Upload matched no files under ${PREFIX}/ — check asset_extensions and the dist artifact contents."
+              exit 1
+            fi
             echo "CDN upload complete."
 
             # Commit→content-ref lookup: release jobs read .by-commit/<sha> to find which prefix to promote without rebuilding.

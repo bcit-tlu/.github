@@ -3,7 +3,7 @@
 #
 #   1. Resolve the content ref — either directly via CONTENT_REF (manual escape hatch), or by waiting for .by-commit/<commit_sha> on the latest container (release-please fires the release on the same push that starts the latest-channel build, so the lookup can lag by minutes).
 #   2. Enumerate the source prefix; an empty prefix means the ref was already pruned from latest — fail rather than promote nothing.
-#   3. Server-side copy each blob across accounts, poll each destination blob until its copy status is 'success', and finally require dest count == source count so an interrupted earlier run can never pass as done.
+#   3. Server-side copy each blob across accounts (skipping destinations whose copy already succeeded — the stable account's immutability window makes redundant copies wasteful), poll each destination blob until its copy status is 'success', and finally require the destination name set to equal the source set so an interrupted earlier run can never pass as done.
 #
 # Auth: --auth-mode login throughout. The job's identity (the stable channel UAMI) holds Blob Data Reader on the latest container — needed to read .by-commit and to list the source prefix — and Blob Data Contributor on the stable container.
 # The server-side copy itself fetches the source over anonymous read (the containers allow public blob access).
@@ -25,7 +25,8 @@ fi
 AUTH=(--auth-mode login)
 TMP=$(mktemp)
 SRC_LIST=$(mktemp)
-trap 'rm -f "$TMP" "$SRC_LIST"' EXIT
+DST_LIST=$(mktemp)
+trap 'rm -f "$TMP" "$SRC_LIST" "$DST_LIST"' EXIT
 
 if [ -z "${CONTENT_REF}" ]; then
 # --- resolve the commit's content ref (with wait) -----------------------------
@@ -64,14 +65,13 @@ if [[ ! "$CONTENT_REF" =~ ^[0-9a-f]{7,64}$ ]]; then
   exit 1
 fi
 
-# --- enumerate the source prefix ----------------------------------------------
+# --- enumerate the source prefix (no --num-results: az follows continuation tokens) ---
 if ! az storage blob list \
     --account-name "$LATEST_ACCOUNT" \
     --container-name "$CDN_CONTAINER" \
     "${AUTH[@]}" \
     --prefix "${CONTENT_REF}/" \
-    --num-results 5000 \
-    --query "[].name" -o tsv > "$SRC_LIST" 2>/dev/null; then
+    --query "[].name" -o tsv | sort > "$SRC_LIST" 2>/dev/null; then
   echo "::error::Failed to list ${LATEST_ACCOUNT}/${CDN_CONTAINER}/${CONTENT_REF}/" >&2
   exit 1
 fi
@@ -84,8 +84,28 @@ if [ "$src_count" -eq 0 ]; then
 fi
 echo "Copying ${src_count} blobs: ${LATEST_ACCOUNT}/${CDN_CONTAINER}/${CONTENT_REF}/ -> ${STABLE_ACCOUNT}/${CDN_CONTAINER}/"
 
+# Snapshot the destination prefix: blobs whose copy already succeeded are skipped, so a retried promotion doesn't write redundant versions into the immutable stable account.
+az storage blob list \
+  --account-name "$STABLE_ACCOUNT" \
+  --container-name "$CDN_CONTAINER" \
+  "${AUTH[@]}" \
+  --prefix "${CONTENT_REF}/" \
+  --query "[].name" -o tsv 2>/dev/null | sort > "$DST_LIST" || true
+
 # --- server-side copy, one job per blob so each can be polled deterministically
 for name in "${src_blobs[@]}"; do
+  if grep -qxF "$name" "$DST_LIST"; then
+    dest_status=$(az storage blob show \
+      --account-name "$STABLE_ACCOUNT" \
+      --container-name "$CDN_CONTAINER" \
+      "${AUTH[@]}" \
+      --name "$name" \
+      --query "properties.copy.status" -o tsv 2>/dev/null || echo "")
+    if [ "$dest_status" = "success" ]; then
+      echo "SKIP  $name (already promoted)"
+      continue
+    fi
+  fi
   az storage blob copy start \
     --account-name "$STABLE_ACCOUNT" \
     --destination-container "$CDN_CONTAINER" \
@@ -121,16 +141,15 @@ for name in "${src_blobs[@]}"; do
   done
 done
 
-# --- final integrity check: destination must hold exactly the source set ------
-dest_count=$(az storage blob list \
+# --- final integrity check: destination name set must equal the source set ----
+az storage blob list \
   --account-name "$STABLE_ACCOUNT" \
   --container-name "$CDN_CONTAINER" \
   "${AUTH[@]}" \
   --prefix "${CONTENT_REF}/" \
-  --num-results 5000 \
-  --query "length(@)" -o tsv 2>/dev/null || echo "0")
-if [ "$dest_count" != "$src_count" ]; then
-  echo "::error::Promoted prefix has ${dest_count} blobs, expected ${src_count} — promotion is incomplete." >&2
+  --query "[].name" -o tsv 2>/dev/null | sort > "$DST_LIST" || true
+if ! diff -q "$SRC_LIST" "$DST_LIST" >/dev/null; then
+  echo "::error::Promoted prefix differs from source — missing: $(comm -23 "$SRC_LIST" "$DST_LIST" | wc -l), extra: $(comm -13 "$SRC_LIST" "$DST_LIST" | wc -l). Promotion is incomplete." >&2
   exit 1
 fi
 
