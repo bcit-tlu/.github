@@ -13,11 +13,16 @@ on:
         type: string
         default: ""
       destination_prefix:
-        description: "Blob prefix path inside the container"
+        description: "Blob prefix path inside the container (the content hash from cdn-build-assets)"
         required: true
         type: string
+      commit_sha:
+        description: "Full commit SHA the assets were built from. When set, writes a .by-commit/<sha> lookup blob containing destination_prefix so release jobs can resolve the content ref without rebuilding. Only pass this on latest-channel uploads."
+        required: false
+        type: string
+        default: ""
       asset_extensions:
-        # Keep this a superset of the cdn-build-assets/cdn-rewrite default: files rewritten but not uploaded 404 on the CDN.
+        # Keep this identical to the cdn-build-assets filter: the content hash covers exactly this set — a file hashed but not uploaded (or vice versa) breaks the ref↔bytes correspondence.
         description: "Comma-separated list of file extensions to upload"
         required: false
         type: string
@@ -98,6 +103,7 @@ jobs:
           CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
           ASSET_EXTS: ${{ inputs.asset_extensions }}
           PREFIX: ${{ inputs.destination_prefix }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
           CACHE_CONTROL: ${{ inputs.cache_control }}
           DIST_DIR: ${{ inputs.dist_dir }}
         with:
@@ -156,3 +162,19 @@ jobs:
             done
             IFS="${OLD_IFS}"
             echo "CDN upload complete."
+
+            # Commit→content-ref lookup: release jobs read .by-commit/<sha> to find which prefix to promote without rebuilding.
+            # The leading dot keeps it out of the lifecycle expiry rules and cdn-cleanup's prefix scan.
+            if [ -n "${COMMIT_SHA:-}" ]; then
+              LOOKUP_FILE="$(mktemp)"
+              printf '%s\n' "${PREFIX}" > "${LOOKUP_FILE}"
+              az storage blob upload \
+                --account-name "${CDN_ACCOUNT_NAME}" \
+                "${AUTH_ARGS[@]}" \
+                --container-name "${CDN_CONTAINER}" \
+                --name ".by-commit/${COMMIT_SHA}" \
+                --file "${LOOKUP_FILE}" \
+                --overwrite true
+              rm -f "${LOOKUP_FILE}"
+              echo "Wrote lookup blob .by-commit/${COMMIT_SHA} -> ${PREFIX}"
+            fi

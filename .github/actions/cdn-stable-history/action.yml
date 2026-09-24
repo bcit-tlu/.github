@@ -1,8 +1,5 @@
 name: "CDN stable history"
-description: |
-  Maintain a rolling list of the last N stable CDN SHAs in blob storage. The
-  list is used by cleanup jobs to know which historical stable SHAs must not
-  be deleted.
+description: "Maintain a rolling list of the last N stable CDN content refs in blob storage. Cleanup jobs use it to know which historical stable prefixes must not be deleted."
 
 inputs:
   cdn_account_name:
@@ -19,11 +16,11 @@ inputs:
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
-  stable_sha:
-    description: "Stable release SHA to add to the history."
+  stable_ref:
+    description: "Stable release content ref to add to the history."
     required: true
   keep_stable:
-    description: "Number of stable SHAs to keep. Minimum 5."
+    description: "Number of stable refs to keep. Minimum 5."
     required: false
     default: "5"
 
@@ -36,5 +33,5 @@ runs:
         CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
         CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
         CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
-        STABLE_SHA: ${{ inputs.stable_sha }}
+        STABLE_REF: ${{ inputs.stable_ref }}
         KEEP_STABLE: ${{ inputs.keep_stable }}

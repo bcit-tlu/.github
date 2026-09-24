@@ -1,14 +1,5 @@
-name: "CDN cleanup old SHA prefixes"
-description: |
-  Delete unreferenced CDN SHA prefixes from Azure Blob Storage. A SHA is
-  protected if it appears in .latest-current, .latest-history, .stable-current,
-  .stable-history, or is the current run SHA.
-
-  With per-channel storage accounts (e.g. bcitcdnlatest / bcitcdnstable), the
-  caller picks the account via cdn_account_name and passes channel so the
-  right pointer blobs are maintained: 'latest' also writes the .latest-*
-  pointers; 'stable' only reads pointers (cdn-stable-history owns stable
-  pointer writes). Empty channel preserves the legacy single-container mode.
+name: "CDN cleanup old ref prefixes"
+description: "Delete unreferenced CDN ref prefixes from Azure Blob Storage. A ref (content hash) is protected if it appears in .latest-current, .latest-history, .stable-current, .stable-history, or is the current run's ref; dot-prefixed bookkeeping blobs (.by-commit/*, pointers, journals) are never touched. With per-channel storage accounts the caller picks the account via cdn_account_name and passes channel: 'latest' also writes the .latest-* pointers; 'stable' only reads pointers (cdn-stable-history owns stable pointer writes). Empty channel preserves the legacy single-container mode."
 
 inputs:
   cdn_account_name:
@@ -29,20 +20,19 @@ inputs:
   repo_name:
     description: "Repository / application name segment in the CDN path."
     required: true
-  sha:
-    description: "SHA this channel is now serving; always protected from deletion."
-    required: false
-    default: ""
-  latest_sha:
-    description: "Legacy alias for sha (kept for existing callers)."
-    required: false
-    default: ""
+  ref:
+    description: "Content ref this channel is now serving; always protected from deletion."
+    required: true
   keep_stable:
-    description: "Number of stable release SHAs protected via the .stable-history journal. Minimum 5."
+    description: "Number of stable release refs protected via the .stable-history journal. Minimum 5."
     required: false
     default: "5"
+  immutable_days:
+    description: "Account-level immutability window in days (set to the storage account's immutability_policy_days — 90 for the stable CDN account). Refs whose youngest blob is inside the window are skipped instead of failing delete."
+    required: false
+    default: ""
   keep_recent:
-    description: "Number of latest SHAs kept in the .latest-history journal (rollout-lag + rollback window). Minimum 5."
+    description: "Number of latest refs kept in the .latest-history journal (rollout-lag + rollback window). Minimum 5."
     required: false
     default: "5"
 
@@ -56,6 +46,7 @@ runs:
         CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
         CHANNEL: ${{ inputs.channel }}
         CDN_SAS_TOKEN: ${{ inputs.cdn_sas_token }}
-        SERVE_SHA: ${{ inputs.sha || inputs.latest_sha }}
+        SERVE_REF: ${{ inputs.ref }}
+        IMMUTABLE_DAYS: ${{ inputs.immutable_days }}
         KEEP_STABLE: ${{ inputs.keep_stable }}
         KEEP_RECENT: ${{ inputs.keep_recent }}
