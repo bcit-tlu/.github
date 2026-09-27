@@ -268,6 +268,10 @@ jobs:
       # introduces them rather than after merge to main.
       #
       #   * main pushes: scan by digest, upload SARIF to Security tab.
+      #     Trivy emits every severity in SARIF unless
+      #     `limit-severities-for-sarif` is set, so without it the
+      #     Security tab fills with MEDIUM/LOW alerts the policy
+      #     does not track.
       #   * PRs: scan by tag; `ignore-unfixed` trims noise to
       #     actionable CVEs.  Advisory today (exit-code 0).
       - name: Resolve image reference for Trivy
@@ -305,6 +309,7 @@ jobs:
           format: sarif
           output: trivy-${{ inputs.component }}.sarif
           severity: CRITICAL,HIGH
+          limit-severities-for-sarif: true
           ignore-unfixed: false
           trivyignores: ${{ inputs.trivyignore }}
           exit-code: "0"
