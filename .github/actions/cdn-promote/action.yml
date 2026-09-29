@@ -1,0 +1,54 @@
+name: "CDN promote latest to stable"
+description: "Promote a content-addressed asset prefix from the latest CDN account to the stable account by server-side copy — no rebuild, no re-upload. Resolves the release tag's commit via the .by-commit/<sha> lookup blob that cdn-upload writes on latest pushes, then copies <content_ref>/* between accounts. The job's OIDC identity needs Storage Blob Data Reader on the source (latest) container and Storage Blob Data Contributor on the destination (stable) container — the 'stable' channel identity has exactly that pairing."
+
+inputs:
+  latest_account:
+    description: "Azure Storage account name for the latest channel (copy source)."
+    required: true
+  stable_account:
+    description: "Azure Storage account name for the stable channel (copy destination)."
+    required: true
+  cdn_container:
+    description: "Azure Blob container name. Defaults to repo_name (one container per repo)."
+    required: false
+    default: ""
+  repo_name:
+    description: "Repository / application name; used as the container name when cdn_container is empty."
+    required: false
+    default: ""
+  commit_sha:
+    description: "Full commit SHA of the release tag — resolved through .by-commit/<sha> to the content ref. Required unless content_ref is given."
+    required: false
+    default: ""
+  content_ref:
+    description: "Content ref to promote directly — skips the .by-commit/<sha> lookup. Manual escape hatch for promoting a known prefix (e.g. the lookup blob is missing)."
+    required: false
+    default: ""
+  copy_timeout_seconds:
+    description: "Max seconds to wait for the server-side copies to complete."
+    required: false
+    default: "300"
+  lookup_timeout_seconds:
+    description: "Max seconds to wait for the .by-commit/<sha> lookup blob to appear (the latest-channel build for the tagged commit may still be running when the release fires)."
+    required: false
+    default: "900"
+
+outputs:
+  content_ref:
+    description: "Resolved content ref that was promoted (the blob prefix and chart pin value)."
+    value: ${{ steps.promote.outputs.content_ref }}
+
+runs:
+  using: composite
+  steps:
+    - id: promote
+      shell: bash
+      run: bash "${{ github.action_path }}/cdn-promote.sh"
+      env:
+        LATEST_ACCOUNT: ${{ inputs.latest_account }}
+        STABLE_ACCOUNT: ${{ inputs.stable_account }}
+        CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
+        COMMIT_SHA: ${{ inputs.commit_sha }}
+        CONTENT_REF: ${{ inputs.content_ref }}
+        COPY_TIMEOUT: ${{ inputs.copy_timeout_seconds }}
+        LOOKUP_TIMEOUT: ${{ inputs.lookup_timeout_seconds }}

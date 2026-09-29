@@ -13,14 +13,21 @@ on:
         type: string
         default: ""
       destination_prefix:
-        description: "Blob prefix path inside the container"
+        description: "Blob prefix path inside the container (the content hash from cdn-build-assets)"
         required: true
         type: string
+      commit_sha:
+        description: "Full commit SHA the assets were built from. When set, writes a .by-commit/<sha> lookup blob containing destination_prefix so release jobs can resolve the content ref without rebuilding. Only pass this on latest-channel uploads."
+        required: false
+        type: string
+        default: ""
       asset_extensions:
+        # Keep this identical to the cdn-build-assets filter: the content hash covers exactly this set — a file hashed but not uploaded (or vice versa) breaks the ref↔bytes correspondence.
+        # Callers should pass cdn-build-assets's asset_extensions output rather than overriding this.
         description: "Comma-separated list of file extensions to upload"
         required: false
         type: string
-        default: "jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,css,js,map"
+        default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot"
       cdn_account_name:
         description: "Azure Storage account name"
         required: true
@@ -40,16 +47,38 @@ on:
         required: false
         type: string
         default: "public, max-age=31536000, immutable"
+      auth_mode:
+        description: "Blob auth mode: 'sas' uses CDN_SAS_TOKEN; 'oidc' uses azure/login with the AZURE_* secrets and --auth-mode login."
+        required: false
+        type: string
+        default: "sas"
+      environment:
+        description: "GitHub Environment the upload job runs under; the Azure federated credential subject is repo:...:environment:<this value>. Empty means no environment (legacy SAS callers)."
+        required: false
+        type: string
+        default: ""
     secrets:
       CDN_SAS_TOKEN:
-        description: "Azure Blob Storage SAS token"
-        required: true
+        description: "Azure Blob Storage SAS token (required when auth_mode is 'sas')"
+        required: false
+      AZURE_CLIENT_ID:
+        description: "Client ID of the managed identity (required when auth_mode is 'oidc')"
+        required: false
+      AZURE_TENANT_ID:
+        description: "Entra ID tenant ID (required when auth_mode is 'oidc')"
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        description: "Azure subscription ID (required when auth_mode is 'oidc')"
+        required: false
 
 jobs:
   upload:
     runs-on: ubuntu-latest
+    # Caller jobs may not set environment themselves, so it arrives as an input and is applied here.
+    environment: ${{ inputs.environment }}
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Download build artifact
         if: inputs.artifact_name != ''
@@ -58,23 +87,52 @@ jobs:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.dist_dir }}
 
+      - name: Azure login (OIDC)
+        if: inputs.auth_mode == 'oidc'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Upload assets to Azure Blob Storage
         uses: azure/cli@v3
         env:
           SAS_TOKEN: ${{ secrets.CDN_SAS_TOKEN }}
+          AUTH_MODE: ${{ inputs.auth_mode }}
           CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
           CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
           ASSET_EXTS: ${{ inputs.asset_extensions }}
           PREFIX: ${{ inputs.destination_prefix }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
           CACHE_CONTROL: ${{ inputs.cache_control }}
           DIST_DIR: ${{ inputs.dist_dir }}
         with:
           inlineScript: |
             set -euo pipefail
 
-            if [ -z "${SAS_TOKEN:-}" ] || [ -z "${CDN_ACCOUNT_NAME:-}" ] || [ -z "${CDN_CONTAINER:-}" ]; then
-              echo "::warning::CDN upload config incomplete (missing SAS_TOKEN/CDN_ACCOUNT_NAME/CDN_CONTAINER); skipping upload."
-              exit 0
+            AUTH_ARGS=()
+            case "${AUTH_MODE}" in
+              oidc)
+                AUTH_ARGS+=(--auth-mode login)
+                ;;
+              sas)
+                if [ -z "${SAS_TOKEN:-}" ]; then
+                  echo "::error::auth_mode=sas requires the CDN_SAS_TOKEN secret" >&2
+                  exit 1
+                fi
+                AUTH_ARGS+=(--sas-token "${SAS_TOKEN}")
+                ;;
+              *)
+                echo "::error::unknown auth_mode '${AUTH_MODE}' (expected 'sas' or 'oidc')" >&2
+                exit 1
+                ;;
+            esac
+
+            # Never green-skip an upload job: missing config is a caller bug, and downstream deployments gate on this job having published assets.
+            if [ -z "${CDN_ACCOUNT_NAME:-}" ] || [ -z "${CDN_CONTAINER:-}" ]; then
+              echo "::error::CDN upload requires cdn_account_name and cdn_container (or repo_name)" >&2
+              exit 1
             fi
 
             SRC_DIR="${DIST_DIR}"
@@ -86,6 +144,23 @@ jobs:
             echo "Uploading assets from ${SRC_DIR} to container ${CDN_CONTAINER} at prefix ${PREFIX}"
             echo "Using asset extensions: ${ASSET_EXTS}"
 
+            # Guard: an empty local match means .by-commit would point at a prefix this run never published (or at stale blobs from an earlier run).
+            match_count=0
+            OLD_IFS="$IFS"
+            IFS=','
+            for ext in ${ASSET_EXTS}; do
+              ext_trim="$(printf '%s' "$ext" | xargs)"
+              [ -z "${ext_trim}" ] && continue
+              n=$(find "${SRC_DIR}" -type f -name "*.${ext_trim}" | wc -l)
+              match_count=$((match_count + n))
+            done
+            IFS="${OLD_IFS}"
+            if [ "${match_count}" -eq 0 ]; then
+              echo "::error::Upload matched no local files in ${SRC_DIR} — check asset_extensions and the dist artifact contents."
+              exit 1
+            fi
+            echo "Matched ${match_count} local files."
+
             OLD_IFS="$IFS"
             IFS=','
             for ext in ${ASSET_EXTS}; do
@@ -95,7 +170,7 @@ jobs:
               echo "  - Uploading assets matching pattern: ${pattern}"
               az storage blob upload-batch \
                 --account-name "${CDN_ACCOUNT_NAME}" \
-                --sas-token "${SAS_TOKEN}" \
+                "${AUTH_ARGS[@]}" \
                 --destination "${CDN_CONTAINER}" \
                 --destination-path "${PREFIX}" \
                 --source "${SRC_DIR}" \
@@ -105,3 +180,19 @@ jobs:
             done
             IFS="${OLD_IFS}"
             echo "CDN upload complete."
+
+            # Commit→content-ref lookup: release jobs read .by-commit/<sha> to find which prefix to promote without rebuilding.
+            # The leading dot keeps it out of the lifecycle expiry rules and cdn-cleanup's prefix scan.
+            if [ -n "${COMMIT_SHA:-}" ]; then
+              LOOKUP_FILE="$(mktemp)"
+              printf '%s\n' "${PREFIX}" > "${LOOKUP_FILE}"
+              az storage blob upload \
+                --account-name "${CDN_ACCOUNT_NAME}" \
+                "${AUTH_ARGS[@]}" \
+                --container-name "${CDN_CONTAINER}" \
+                --name ".by-commit/${COMMIT_SHA}" \
+                --file "${LOOKUP_FILE}" \
+                --overwrite true
+              rm -f "${LOOKUP_FILE}"
+              echo "Wrote lookup blob .by-commit/${COMMIT_SHA} -> ${PREFIX}"
+            fi
