@@ -106,13 +106,12 @@ for name in "${src_blobs[@]}"; do
       continue
     fi
   fi
+  # --source-uri (public URL), not --source-account-*: the latter makes az resolve source credentials via listKeys/getUserDelegationKey, account-scope actions the channel UAMIs deliberately lack (azure-cli#28167).
   az storage blob copy start \
     --account-name "$STABLE_ACCOUNT" \
     --destination-container "$CDN_CONTAINER" \
     --destination-blob "$name" \
-    --source-account-name "$LATEST_ACCOUNT" \
-    --source-container "$CDN_CONTAINER" \
-    --source-blob "$name" \
+    --source-uri "https://${LATEST_ACCOUNT}.blob.core.windows.net/${CDN_CONTAINER}/${name}" \
     "${AUTH[@]}" >/dev/null
 done
 
