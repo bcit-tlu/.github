@@ -23,6 +23,11 @@ if [ -z "${COMMIT_SHA}" ] && [ -z "${CONTENT_REF}" ]; then
 fi
 
 AUTH=(--auth-mode login)
+
+# Percent-encode a blob name for URL use, preserving '/' separators (@uri encodes '/' as %2F otherwise).
+url_encode_path() {
+  jq -rn --arg s "$1" '$s | split("/") | map(@uri) | join("/")'
+}
 TMP=$(mktemp)
 SRC_LIST=$(mktemp)
 DST_LIST=$(mktemp)
@@ -107,11 +112,12 @@ for name in "${src_blobs[@]}"; do
     fi
   fi
   # --source-uri (public URL), not --source-account-*: the latter makes az resolve source credentials via listKeys/getUserDelegationKey, account-scope actions the channel UAMIs deliberately lack (azure-cli#28167).
+  # The URI carries the URL-encoded name; the destination keeps the raw blob name.
   az storage blob copy start \
     --account-name "$STABLE_ACCOUNT" \
     --destination-container "$CDN_CONTAINER" \
     --destination-blob "$name" \
-    --source-uri "https://${LATEST_ACCOUNT}.blob.core.windows.net/${CDN_CONTAINER}/${name}" \
+    --source-uri "https://${LATEST_ACCOUNT}.blob.core.windows.net/${CDN_CONTAINER}/$(url_encode_path "$name")" \
     "${AUTH[@]}" >/dev/null
 done
 
