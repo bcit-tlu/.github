@@ -118,10 +118,22 @@ jobs:
       security-events: write     # Trivy SARIF upload
       actions: read              # Required by codeql-action/upload-sarif on private repos
 
+    # One build per (image, PR) at a time, newest wins — otherwise an older
+    # PR run finishing last would move the pr-<n> alias backwards. Pushes to
+    # branches queue per ref instead of cancelling.
+    concurrency:
+      group: oci-build-${{ inputs.image_name }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
     steps:
+      # PR image pushes build the PR *head* (what sha-<head> promises), not
+      # GitHub's synthetic merge commit — a base-branch advance must never
+      # change the bytes behind an unchanged head tag. Ordinary PR checks
+      # keep the merge ref so they test the merged result.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ env.PUSH_PR == 'true' && github.event.pull_request.head.sha || '' }}
 
       # ── Change detection ─────────────────────────────────────
       - name: Detect changes
@@ -288,7 +300,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ inputs.component }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.IMAGE_SHA }}
             org.opencontainers.image.version=${{ steps.version.outputs.next }}-rc.${{ steps.version.outputs.ts }}.${{ steps.version.outputs.short }}
           tags: ${{ steps.tags.outputs.tags }}
 
