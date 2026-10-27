@@ -30,6 +30,12 @@
 # GITHUB_TOKEN with packages: write can delete versions of packages that
 # belong to the calling repository (which is where oci-build publishes).
 # Fork PRs never pushed images, so there is nothing to delete for them.
+#
+# Known gaps (by design, not silent): a head that was force-pushed away
+# leaves its sha-<old head> version behind (it is no longer a PR commit
+# and the pr-<n> alias moved on); a build still running when the PR
+# closes publishes after this job ran. Both are sha-only versions and are
+# the target of a periodic sweep, not of this per-PR hook.
 
 name: PR image cleanup
 
@@ -74,12 +80,19 @@ jobs:
             pkg="${REPO}/${image}"
             enc="${pkg//\//%2F}"
             # Org-owned packages live under /orgs; user-owned under /users.
-            base="orgs/${OWNER}/packages/container/${enc}/versions"
-            if ! gh api "${base}?per_page=1" >/dev/null 2>&1; then
-              base="users/${OWNER}/packages/container/${enc}/versions"
+            base="orgs/${OWNER}/packages/container/${enc}"
+            if ! gh api "${base}/versions?per_page=1" >/dev/null 2>&1; then
+              base="users/${OWNER}/packages/container/${enc}"
             fi
             echo "== ${pkg}"
-            # id<TAB>tag1,tag2,...
+            # List everything first (a failed listing is fatal), decide, then
+            # delete — deleting while paginating would shift offsets and skip
+            # versions.
+            listing="$(mktemp)"
+            gh api --paginate "${base}/versions?per_page=100" \
+              --jq '.[] | select(.metadata.container.tags | length > 0) | [.id, (.metadata.container.tags | join(","))] | @tsv' \
+              >"${listing}"
+            to_delete=()
             while IFS=$'\t' read -r id tags; do
               [[ -z "${id}" ]] && continue
               IFS=',' read -ra tag_list <<< "${tags}"
@@ -90,13 +103,14 @@ jobs:
                 [[ "${t}" =~ ^(pr-[0-9]+|sha-[0-9a-f]{40})$ ]] || only_pr=false
               done
               if [[ "${mine}" == true && "${only_pr}" == true ]]; then
-                echo "  delete version ${id} [${tags}]"
-                gh api -X DELETE "${base%/versions}/versions/${id}" >/dev/null
-                deleted=$((deleted+1))
+                echo "  will delete version ${id} [${tags}]"; to_delete+=("${id}")
               elif [[ "${mine}" == true ]]; then
                 echo "  keep version ${id} [${tags}] — also tagged for a non-PR build"
               fi
-            done < <(gh api --paginate "${base}?per_page=100" \
-              --jq '.[] | select(.metadata.container.tags | length > 0) | [.id, (.metadata.container.tags | join(","))] | @tsv')
+            done <"${listing}"
+            for id in "${to_delete[@]}"; do
+              gh api -X DELETE "${base}/versions/${id}" >/dev/null
+              deleted=$((deleted+1))
+            done
           done <<< "${IMAGE_NAMES}"
           echo "deleted ${deleted} version(s)"
