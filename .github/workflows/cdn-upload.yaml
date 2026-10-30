@@ -164,13 +164,15 @@ jobs:
             echo "Using asset files: ${ASSET_FILES:-<none>}"
 
             # Resolve directory and file selectors once — the validated set is
-            # reused for the empty-match guard and the upload below.
+            # reused for the empty-match guard and the upload below. Entries are
+            # normalized (strip leading ./ and trailing /, collapse /./ and //)
+            # so selector spelling can't produce a blob name no URL will fetch.
             VALID_DIRS=()
             VALID_FILES=()
             OLD_IFS="$IFS"
             IFS=','
             for d in ${ASSET_DIRS}; do
-              d_trim="$(printf '%s' "$d" | xargs | sed 's|^\.\?/||; s|/$||')"
+              d_trim="$(printf '%s' "$d" | xargs | sed 's|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
               [ -z "${d_trim}" ] && continue
               if [[ "${d_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
                 echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path" >&2
@@ -180,10 +182,14 @@ jobs:
                 echo "::error::asset_dirs entry '${d_trim}' does not exist under ${SRC_DIR}" >&2
                 exit 1
               fi
+              if [ -L "${SRC_DIR}/${d_trim}" ] || find "${SRC_DIR}/${d_trim}" -type l -print -quit | grep -q .; then
+                echo "::error::asset_dirs entry '${d_trim}' is or contains symlinks — uploads would follow them outside dist/" >&2
+                exit 1
+              fi
               VALID_DIRS+=("${d_trim}")
             done
             for f in ${ASSET_FILES}; do
-              f_trim="$(printf '%s' "$f" | xargs | sed 's|^\.\?/||')"
+              f_trim="$(printf '%s' "$f" | xargs | sed 's|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
               [ -z "${f_trim}" ] && continue
               if [[ "${f_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
                 echo "::error::asset_files entry '${f_trim}' is not a safe relative path" >&2
@@ -191,6 +197,10 @@ jobs:
               fi
               if [ ! -f "${SRC_DIR}/${f_trim}" ]; then
                 echo "::error::asset_files entry '${f_trim}' not found under ${SRC_DIR}" >&2
+                exit 1
+              fi
+              if [ -L "${SRC_DIR}/${f_trim}" ]; then
+                echo "::error::asset_files entry '${f_trim}' is a symlink — uploads would follow it outside dist/" >&2
                 exit 1
               fi
               VALID_FILES+=("${f_trim}")
@@ -219,29 +229,64 @@ jobs:
             fi
             echo "Matched ${match_count} local files."
 
-            OLD_IFS="$IFS"
-            IFS=','
-            for ext in ${ASSET_EXTS}; do
-              ext_trim="$(printf '%s' "$ext" | xargs)"
-              [ -z "${ext_trim}" ] && continue
-              pattern="*.${ext_trim}"
-              echo "  - Uploading assets matching pattern: ${pattern}"
-              az storage blob upload-batch \
-                --account-name "${CDN_ACCOUNT_NAME}" \
-                "${AUTH_ARGS[@]}" \
-                --destination "${CDN_CONTAINER}" \
-                --destination-path "${PREFIX}" \
-                --source "${SRC_DIR}" \
-                --pattern "${pattern}" \
-                --overwrite true \
-                --content-cache-control "${CACHE_CONTROL}"
-            done
-            IFS="${OLD_IFS}"
+            # Extension matches: with dir/file selectors in play, subtract
+            # already-covered paths and upload the remainder per file — no blob
+            # is uploaded twice (the hash side dedupes via sort -u). Extension-
+            # only callers keep the efficient per-extension batch upload.
+            if [ "${#VALID_DIRS[@]}" -eq 0 ] && [ "${#VALID_FILES[@]}" -eq 0 ]; then
+              OLD_IFS="$IFS"
+              IFS=','
+              for ext in ${ASSET_EXTS}; do
+                ext_trim="$(printf '%s' "$ext" | xargs)"
+                [ -z "${ext_trim}" ] && continue
+                pattern="*.${ext_trim}"
+                echo "  - Uploading assets matching pattern: ${pattern}"
+                az storage blob upload-batch \
+                  --account-name "${CDN_ACCOUNT_NAME}" \
+                  "${AUTH_ARGS[@]}" \
+                  --destination "${CDN_CONTAINER}" \
+                  --destination-path "${PREFIX}" \
+                  --source "${SRC_DIR}" \
+                  --pattern "${pattern}" \
+                  --overwrite true \
+                  --content-cache-control "${CACHE_CONTROL}"
+              done
+              IFS="${OLD_IFS}"
+            else
+              mapfile -t ext_files < <(
+                IFS=','
+                for ext in ${ASSET_EXTS}; do
+                  ext_trim="$(printf '%s' "$ext" | xargs)"
+                  [ -z "${ext_trim}" ] && continue
+                  find "${SRC_DIR}" -type f -name "*.${ext_trim}"
+                done
+              )
+              for ef in ${ext_files[@]+"${ext_files[@]}"}; do
+                rel="${ef#"${SRC_DIR}/"}"
+                covered=0
+                for d in "${VALID_DIRS[@]}"; do
+                  case "${rel}" in "${d}/"*) covered=1;; esac
+                done
+                for f in "${VALID_FILES[@]}"; do
+                  [ "${rel}" = "${f}" ] && covered=1
+                done
+                [ "${covered}" -eq 1 ] && continue
+                echo "  - Uploading extension match: ${rel}"
+                az storage blob upload \
+                  --account-name "${CDN_ACCOUNT_NAME}" \
+                  "${AUTH_ARGS[@]}" \
+                  --container-name "${CDN_CONTAINER}" \
+                  --name "${PREFIX}/${rel}" \
+                  --file "${ef}" \
+                  --overwrite true \
+                  --content-cache-control "${CACHE_CONTROL}"
+              done
+            fi
 
             # Whole-directory uploads: the dir segment goes in
             # destination-path — --source on a subdir uploads its contents
             # relative to itself, so omitting it would flatten the tree.
-            for d in "${VALID_DIRS[@]}"; do
+            for d in ${VALID_DIRS[@]+"${VALID_DIRS[@]}"}; do
               echo "  - Uploading directory: ${d}/"
               az storage blob upload-batch \
                 --account-name "${CDN_ACCOUNT_NAME}" \
@@ -254,7 +299,13 @@ jobs:
             done
 
             # Explicit single-file uploads (e.g. favicon.ico at the root).
-            for f in "${VALID_FILES[@]}"; do
+            # Skip files already covered by a selected directory.
+            for f in ${VALID_FILES[@]+"${VALID_FILES[@]}"}; do
+              in_dir=0
+              for d in "${VALID_DIRS[@]}"; do
+                case "${f}" in "${d}/"*) in_dir=1;; esac
+              done
+              [ "${in_dir}" -eq 1 ] && { echo "  - Skipping ${f} (inside a selected directory)"; continue; }
               echo "  - Uploading file: ${f}"
               az storage blob upload \
                 --account-name "${CDN_ACCOUNT_NAME}" \
