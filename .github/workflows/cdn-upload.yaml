@@ -172,9 +172,10 @@ jobs:
             OLD_IFS="$IFS"
             IFS=','
             for d in ${ASSET_DIRS}; do
-              d_trim="$(printf '%s' "$d" | xargs | sed 's|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
+              d_trim="$(printf '%s' "$d" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
               [ -z "${d_trim}" ] && continue
-              if [[ "${d_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
+              path_re='[^a-zA-Z0-9/_.% -]'
+              if [[ "${d_trim}" =~ ${path_re} ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
                 echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path" >&2
                 exit 1
               fi
@@ -189,9 +190,9 @@ jobs:
               VALID_DIRS+=("${d_trim}")
             done
             for f in ${ASSET_FILES}; do
-              f_trim="$(printf '%s' "$f" | xargs | sed 's|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
+              f_trim="$(printf '%s' "$f" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
               [ -z "${f_trim}" ] && continue
-              if [[ "${f_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
+              if [[ "${f_trim}" =~ ${path_re} ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
                 echo "::error::asset_files entry '${f_trim}' is not a safe relative path" >&2
                 exit 1
               fi

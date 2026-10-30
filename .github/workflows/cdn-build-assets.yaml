@@ -162,9 +162,11 @@ jobs:
           for d in "${dirs[@]}"; do
             # Normalize: strip leading ./ and trailing /, collapse /./ and // — the
             # same spelling must resolve to the same hashed path and blob name.
-            d_trim="$(printf '%s' "$d" | xargs | sed 's|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
+            d_trim="$(printf '%s' "$d" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
             [ -z "${d_trim}" ] && continue
-            if [[ "${d_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
+            # path_re via var: a space in the class word-splits on the =~ RHS
+            path_re='[^a-zA-Z0-9/_.% -]'
+            if [[ "${d_trim}" =~ ${path_re} ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
               echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path"
               exit 1
             fi
@@ -181,9 +183,9 @@ jobs:
 
           IFS=',' read -ra fls <<< "${ASSET_FILES}"
           for f in "${fls[@]}"; do
-            f_trim="$(printf '%s' "$f" | xargs | sed 's|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
+            f_trim="$(printf '%s' "$f" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
             [ -z "${f_trim}" ] && continue
-            if [[ "${f_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
+            if [[ "${f_trim}" =~ ${path_re} ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
               echo "::error::asset_files entry '${f_trim}' is not a safe relative path"
               exit 1
             fi
@@ -216,7 +218,9 @@ jobs:
           echo "verify_extensions=${verify_exts}" >> "$GITHUB_OUTPUT"
           # Basenames of published extensionless files (robots, LICENSE...) —
           # refs ending in these are checked as full path segments.
-          verify_names=$(printf '%s\n' "${files[@]}" | xargs -n1 basename | { grep -v '\.' || true; } | sort -u | tr '\n' ',' | sed 's/,$//')
+          # sed basename (not xargs — it splits on spaces). Emit each name
+          # twice: raw plus percent-encoded, since refs may write either form.
+          verify_names=$(printf '%s\n' "${files[@]}" | sed 's|.*/||' | { grep -v '\.' || true; } | sed 'p;s/%/%25/g;s/ /%20/g' | sort -u | tr '\n' ',' | sed 's/,$//')
           echo "verify_names=${verify_names}" >> "$GITHUB_OUTPUT"
 
       # Load shared actions at the ref the caller pinned this workflow to (uses: rejects expressions, so `uses: .../cdn-verify@main` would silently track main even for tagged/SHA-pinned callers).

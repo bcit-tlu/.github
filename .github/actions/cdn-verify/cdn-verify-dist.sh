@@ -14,7 +14,8 @@ if [[ "$ASSET_EXTENSIONS" =~ [^a-zA-Z0-9,] ]]; then
   echo "ERROR: ASSET_EXTENSIONS contains invalid characters: ${ASSET_EXTENSIONS}" >&2
   exit 1
 fi
-if [[ "$ASSET_NAMES" =~ [^a-zA-Z0-9,._-] ]]; then
+name_re='[^a-zA-Z0-9,._% -]'  # via var: a space in the class word-splits on the =~ RHS
+if [[ "$ASSET_NAMES" =~ ${name_re} ]]; then
   echo "ERROR: ASSET_NAMES contains invalid characters: ${ASSET_NAMES}" >&2
   exit 1
 fi
