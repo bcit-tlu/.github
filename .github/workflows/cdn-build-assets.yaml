@@ -216,7 +216,7 @@ jobs:
           echo "verify_extensions=${verify_exts}" >> "$GITHUB_OUTPUT"
           # Basenames of published extensionless files (robots, LICENSE...) —
           # refs ending in these are checked as full path segments.
-          verify_names=$(printf '%s\n' "${files[@]}" | xargs -n1 basename | grep -v '\.' | sort -u | tr '\n' ',' | sed 's/,$//')
+          verify_names=$(printf '%s\n' "${files[@]}" | xargs -n1 basename | { grep -v '\.' || true; } | sort -u | tr '\n' ',' | sed 's/,$//')
           echo "verify_names=${verify_names}" >> "$GITHUB_OUTPUT"
 
       # Load shared actions at the ref the caller pinned this workflow to (uses: rejects expressions, so `uses: .../cdn-verify@main` would silently track main even for tagged/SHA-pinned callers).

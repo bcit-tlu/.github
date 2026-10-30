@@ -22,16 +22,20 @@ fi
 EXT_PATTERN="${ASSET_EXTENSIONS//,/|}"
 NAME_PATTERN="${ASSET_NAMES//,/|}"
 
-# Candidate refs: paths ending in a published extension (.css) or in a
-# published extensionless basename as a full path segment (/robots, a/LICENSE).
-REF_RE=''
+# Candidate-ref suffix shared by all detectors: a path ending in a published
+# extension (.css) or in a published extensionless basename as a full path
+# segment (/robots, a/LICENSE). __C__ is a per-syntax placeholder the perl
+# substitutes with that syntax's path-char class — quoted attrs stop at the
+# quote, unquoted at whitespace or '=', CSS values at ')' — so a candidate
+# can never swallow a following reference.
+REF_TAIL=''
 if [ -n "${EXT_PATTERN}" ]; then
-  REF_RE="[^\"\\x27]+\\.(?:${EXT_PATTERN})"
+  REF_TAIL="__C__+\\.(?:${EXT_PATTERN})"
 fi
 if [ -n "${NAME_PATTERN}" ]; then
-  REF_RE="${REF_RE:+${REF_RE}|}(?:[^\"\\x27]*?/)?(?:${NAME_PATTERN})"
+  REF_TAIL="${REF_TAIL:+${REF_TAIL}|}(?:__C__*?/)?(?:${NAME_PATTERN})"
 fi
-export REF_RE CDN_BASE_URL
+export REF_TAIL CDN_BASE_URL
 
 if [ ! -d "$DIST_DIR" ]; then
   echo "ERROR: dist directory ${DIST_DIR} not found" >&2
@@ -49,8 +53,14 @@ find "$DIST_DIR" -type f \( -name '*.html' -o -name '*.css' \) -print0 | while I
   FILE="$f" FILE_DIR="$rel_dir" perl -e '
     my $file = $ENV{FILE};
     my $dir  = $ENV{FILE_DIR} // q{};
-    my $re   = $ENV{REF_RE} // q{};
-    exit 0 unless $re;
+    my $tail = $ENV{REF_TAIL} // q{};
+    exit 0 unless $tail;
+    # Per-syntax path-char classes so a candidate stops at its own boundary
+    # (never swallows the next attribute or url()).
+    my $mk = sub { my $c = shift; (my $r = $tail) =~ s/__C__/$c/g; return qr/$r/; };
+    my $reQ = $mk->(q{[^"\x27]});          # inside quotes
+    my $reU = $mk->(q{[^\s"\x27=<>`]});    # unquoted attr value
+    my $reC = $mk->(q{[^"\x27\)]});        # css @import/url()
 
     open my $fh, q{<}, $file or exit 0;
     my $content = do { local $/; <$fh> };
@@ -86,13 +96,13 @@ find "$DIST_DIR" -type f \( -name '*.html' -o -name '*.css' \) -print0 | while I
       }
     };
 
-    while ($content =~ m{(src|href|data-src)\s*=\s*(?:(["\x27])((?:${re})(?:[#?][^"\x27]*)?)\2|((?:${re})(?:[#?][^\s"\x27<>`]*)?))}gi) {
+    while ($content =~ m{(src|href|data-src)\s*=\s*(?:(["\x27])((?:${reQ})(?:[#?][^"\x27]*)?)\2|((?:${reU})(?:[#?][^\s"\x27<>`]*)?)(?=$|[\s"\x27=<>`]))}gi) {
       $check->(defined $3 ? $3 : $4, q{html});
     }
-    while ($content =~ m{\@import\s+(?:url\()?(["\x27]?)((?:${re})(?:[#?][^"\x27\)]*)?)\1\)?}gi) {
+    while ($content =~ m{\@import\s+(?:url\()?(["\x27]?)((?:${reC})(?:[#?][^"\x27\)]*)?)\1\)?}gi) {
       $check->($2, q{css-import});
     }
-    while ($content =~ m{url\(\s*(["\x27]?)((?:${re})(?:[#?][^"\x27\)]*)?)\1\s*\)}gi) {
+    while ($content =~ m{url\(\s*(["\x27]?)((?:${reC})(?:[#?][^"\x27\)]*)?)\1\s*\)}gi) {
       $check->($2, q{css-url});
     }
   ' >> "$VIOLATIONS"
@@ -102,11 +112,13 @@ done
 find "$DIST_DIR" -type f -name '*.js' -print0 | while IFS= read -r -d '' f; do
   FILE="$f" perl -e '
     my $file = $ENV{FILE};
-    my $re   = $ENV{REF_RE} // q{};
-    exit 0 unless $re;
+    my $tail = $ENV{REF_TAIL} // q{};
+    exit 0 unless $tail;
+    (my $re = $tail) =~ s/__C__/[^"\x27]/g;
+    my $reQ = qr/$re/;
     open my $fh, q{<}, $file or exit 0;
     my $content = do { local $/; <$fh> };
-    while ($content =~ m{(["\x27])(/(?!/)(?:${re})(?:[#?][^"\x27]*)?)\1}gi) {
+    while ($content =~ m{(["\x27])(/(?!/)(?:${reQ})(?:[#?][^"\x27]*)?)\1}gi) {
       print "${file}: js root-absolute string $2\n";
     }
   ' >> "$VIOLATIONS"
