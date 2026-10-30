@@ -3,7 +3,9 @@
 # Fails on: root-absolute refs, ../ refs escaping the dist root, baked CDN hosts.
 set -euo pipefail
 
-ASSET_EXTENSIONS="${ASSET_EXTENSIONS:?ASSET_EXTENSIONS is required}"
+# Empty is allowed: ref detection no-ops (nothing published to reference),
+# but the baked-hostname check below still runs.
+ASSET_EXTENSIONS="${ASSET_EXTENSIONS:-}"
 DIST_DIR="${DIST_DIR:-dist}"
 CDN_BASE_URL="${CDN_BASE_URL:-}"
 
