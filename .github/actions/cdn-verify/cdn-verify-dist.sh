@@ -58,9 +58,9 @@ find "$DIST_DIR" -type f \( -name '*.html' -o -name '*.css' \) -print0 | while I
     # Per-syntax path-char classes so a candidate stops at its own boundary
     # (never swallows the next attribute or url()).
     my $mk = sub { my $c = shift; (my $r = $tail) =~ s/__C__/$c/g; return qr/$r/; };
-    my $reQ = $mk->(q{[^"\x27]});          # inside quotes
-    my $reU = $mk->(q{[^\s"\x27=<>`]});    # unquoted attr value
-    my $reC = $mk->(q{[^"\x27\)]});        # css @import/url()
+    my $reQ = $mk->(q{[^"\x27]});          # inside quotes — html attr or css; ) is legal here
+    my $reU = $mk->(q{[^\s"\x27=<>`]});    # unquoted html attr value
+    my $reC = $mk->(q{[^"\x27\)]});        # unquoted css value — stops at )
 
     open my $fh, q{<}, $file or exit 0;
     my $content = do { local $/; <$fh> };
@@ -99,11 +99,11 @@ find "$DIST_DIR" -type f \( -name '*.html' -o -name '*.css' \) -print0 | while I
     while ($content =~ m{(src|href|data-src)\s*=\s*(?:(["\x27])((?:${reQ})(?:[#?][^"\x27]*)?)\2|((?:${reU})(?:[#?][^\s"\x27<>`]*)?)(?=$|[\s"\x27=<>`]))}gi) {
       $check->(defined $3 ? $3 : $4, q{html});
     }
-    while ($content =~ m{\@import\s+(?:url\()?(["\x27]?)((?:${reC})(?:[#?][^"\x27\)]*)?)\1\)?}gi) {
-      $check->($2, q{css-import});
+    while ($content =~ m{\@import\s+(?:url\()?\s*(?:(["\x27])((?:${reQ})(?:[#?][^"\x27]*)?)\1\)?|((?:${reC})(?:[#?][^"\x27\)]*)?))}gi) {
+      $check->(defined $2 ? $2 : $3, q{css-import});
     }
-    while ($content =~ m{url\(\s*(["\x27]?)((?:${reC})(?:[#?][^"\x27\)]*)?)\1\s*\)}gi) {
-      $check->($2, q{css-url});
+    while ($content =~ m{url\(\s*(?:(["\x27])((?:${reQ})(?:[#?][^"\x27]*)?)\1|((?:${reC})(?:[#?][^"\x27\)]*)?))\s*\)}gi) {
+      $check->(defined $2 ? $2 : $3, q{css-url});
     }
   ' >> "$VIOLATIONS"
 done
