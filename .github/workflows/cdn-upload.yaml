@@ -24,10 +24,24 @@ on:
       asset_extensions:
         # Keep this identical to the cdn-build-assets filter: the content hash covers exactly this set — a file hashed but not uploaded (or vice versa) breaks the ref↔bytes correspondence.
         # Callers should pass cdn-build-assets's asset_extensions output rather than overriding this.
-        description: "Comma-separated list of file extensions to upload"
+        description: "Comma-separated list of file extensions to upload. Unioned with asset_dirs and asset_files; may be empty when they cover the set."
         required: false
         type: string
         default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot"
+      asset_dirs:
+        # Keep this identical to the cdn-build-assets filter: the content hash covers exactly this union — a file hashed but not uploaded (or vice versa) breaks the ref↔bytes correspondence.
+        # Callers should pass cdn-build-assets's asset_dirs output rather than overriding this.
+        description: "Comma-separated list of dist_dir subdirectories uploaded wholesale — every file under them regardless of type"
+        required: false
+        type: string
+        default: ""
+      asset_files:
+        # Keep this identical to the cdn-build-assets filter: the content hash covers exactly this union — a file hashed but not uploaded (or vice versa) breaks the ref↔bytes correspondence.
+        # Callers should pass cdn-build-assets's asset_files output rather than overriding this.
+        description: "Comma-separated list of individual files uploaded by dist-relative path (e.g. 'favicon.ico')"
+        required: false
+        type: string
+        default: ""
       cdn_account_name:
         description: "Azure Storage account name"
         required: true
@@ -104,6 +118,8 @@ jobs:
           CDN_ACCOUNT_NAME: ${{ inputs.cdn_account_name }}
           CDN_CONTAINER: ${{ inputs.cdn_container || inputs.repo_name }}
           ASSET_EXTS: ${{ inputs.asset_extensions }}
+          ASSET_DIRS: ${{ inputs.asset_dirs }}
+          ASSET_FILES: ${{ inputs.asset_files }}
           PREFIX: ${{ inputs.destination_prefix }}
           COMMIT_SHA: ${{ inputs.commit_sha }}
           CACHE_CONTROL: ${{ inputs.cache_control }}
@@ -144,6 +160,42 @@ jobs:
 
             echo "Uploading assets from ${SRC_DIR} to container ${CDN_CONTAINER} at prefix ${PREFIX}"
             echo "Using asset extensions: ${ASSET_EXTS}"
+            echo "Using asset dirs: ${ASSET_DIRS:-<none>}"
+            echo "Using asset files: ${ASSET_FILES:-<none>}"
+
+            # Resolve directory and file selectors once — the validated set is
+            # reused for the empty-match guard and the upload below.
+            VALID_DIRS=()
+            VALID_FILES=()
+            OLD_IFS="$IFS"
+            IFS=','
+            for d in ${ASSET_DIRS}; do
+              d_trim="$(printf '%s' "$d" | xargs | sed 's|^\.\?/||; s|/$||')"
+              [ -z "${d_trim}" ] && continue
+              if [[ "${d_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
+                echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path" >&2
+                exit 1
+              fi
+              if [ ! -d "${SRC_DIR}/${d_trim}" ]; then
+                echo "::error::asset_dirs entry '${d_trim}' does not exist under ${SRC_DIR}" >&2
+                exit 1
+              fi
+              VALID_DIRS+=("${d_trim}")
+            done
+            for f in ${ASSET_FILES}; do
+              f_trim="$(printf '%s' "$f" | xargs | sed 's|^\.\?/||')"
+              [ -z "${f_trim}" ] && continue
+              if [[ "${f_trim}" =~ [^a-zA-Z0-9/_.-] ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
+                echo "::error::asset_files entry '${f_trim}' is not a safe relative path" >&2
+                exit 1
+              fi
+              if [ ! -f "${SRC_DIR}/${f_trim}" ]; then
+                echo "::error::asset_files entry '${f_trim}' not found under ${SRC_DIR}" >&2
+                exit 1
+              fi
+              VALID_FILES+=("${f_trim}")
+            done
+            IFS="${OLD_IFS}"
 
             # Guard: an empty local match means .by-commit would point at a prefix this run never published (or at stale blobs from an earlier run).
             match_count=0
@@ -156,8 +208,13 @@ jobs:
               match_count=$((match_count + n))
             done
             IFS="${OLD_IFS}"
+            for d in "${VALID_DIRS[@]}"; do
+              n=$(find "${SRC_DIR}/${d}" -type f | wc -l)
+              match_count=$((match_count + n))
+            done
+            match_count=$((match_count + ${#VALID_FILES[@]}))
             if [ "${match_count}" -eq 0 ]; then
-              echo "::error::Upload matched no local files in ${SRC_DIR} — check asset_extensions and the dist artifact contents."
+              echo "::error::Upload matched no local files in ${SRC_DIR} — check asset_dirs/asset_files/asset_extensions and the dist artifact contents."
               exit 1
             fi
             echo "Matched ${match_count} local files."
@@ -180,6 +237,34 @@ jobs:
                 --content-cache-control "${CACHE_CONTROL}"
             done
             IFS="${OLD_IFS}"
+
+            # Whole-directory uploads: the dir segment goes in
+            # destination-path — --source on a subdir uploads its contents
+            # relative to itself, so omitting it would flatten the tree.
+            for d in "${VALID_DIRS[@]}"; do
+              echo "  - Uploading directory: ${d}/"
+              az storage blob upload-batch \
+                --account-name "${CDN_ACCOUNT_NAME}" \
+                "${AUTH_ARGS[@]}" \
+                --destination "${CDN_CONTAINER}" \
+                --destination-path "${PREFIX}/${d}" \
+                --source "${SRC_DIR}/${d}" \
+                --overwrite true \
+                --content-cache-control "${CACHE_CONTROL}"
+            done
+
+            # Explicit single-file uploads (e.g. favicon.ico at the root).
+            for f in "${VALID_FILES[@]}"; do
+              echo "  - Uploading file: ${f}"
+              az storage blob upload \
+                --account-name "${CDN_ACCOUNT_NAME}" \
+                "${AUTH_ARGS[@]}" \
+                --container-name "${CDN_CONTAINER}" \
+                --name "${PREFIX}/${f}" \
+                --file "${SRC_DIR}/${f}" \
+                --overwrite true \
+                --content-cache-control "${CACHE_CONTROL}"
+            done
             echo "CDN upload complete."
 
             # Commit→content-ref lookup: release jobs read .by-commit/<sha> to find which prefix to promote without rebuilding.
