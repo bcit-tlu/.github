@@ -169,12 +169,13 @@ jobs:
             # so selector spelling can't produce a blob name no URL will fetch.
             VALID_DIRS=()
             VALID_FILES=()
+            # path_re via var: a space in the class word-splits on the =~ RHS
+            path_re='[^a-zA-Z0-9/_.% -]'
             OLD_IFS="$IFS"
             IFS=','
             for d in ${ASSET_DIRS}; do
               d_trim="$(printf '%s' "$d" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
               [ -z "${d_trim}" ] && continue
-              path_re='[^a-zA-Z0-9/_.% -]'
               if [[ "${d_trim}" =~ ${path_re} ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
                 echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path" >&2
                 exit 1

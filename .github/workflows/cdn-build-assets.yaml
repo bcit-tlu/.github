@@ -158,14 +158,14 @@ jobs:
             (cd "${DIST_DIR}" && find . -type f \( "${pred[@]:1}" \) -print0) >> "$files_list"
           fi
 
+          # path_re via var: a space in the class word-splits on the =~ RHS
+          path_re='[^a-zA-Z0-9/_.% -]'
           IFS=',' read -ra dirs <<< "${ASSET_DIRS}"
           for d in "${dirs[@]}"; do
             # Normalize: strip leading ./ and trailing /, collapse /./ and // — the
             # same spelling must resolve to the same hashed path and blob name.
             d_trim="$(printf '%s' "$d" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
             [ -z "${d_trim}" ] && continue
-            # path_re via var: a space in the class word-splits on the =~ RHS
-            path_re='[^a-zA-Z0-9/_.% -]'
             if [[ "${d_trim}" =~ ${path_re} ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
               echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path"
               exit 1
