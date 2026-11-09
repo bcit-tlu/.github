@@ -7,8 +7,8 @@
 # bot-skip guard need the PR context. Do not use `pull_request_target`:
 # GitHub blocks that event on public repositories by default
 # (https://gh.io/securely-using-pull_request_target), and this check needs
-# no write access or secrets. The job only reads the PR, so it behaves the
-# same for same-repo, Dependabot and fork PRs (their tokens are read-only).
+# no write access or secrets: it only reads the PR, so the read-only token
+# that same-repo and fork PRs both receive is enough.
 # Failures are explained in the job summary and an error annotation rather
 # than a PR comment, which would need `pull-requests: write`.
 #
