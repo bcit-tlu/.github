@@ -3,26 +3,31 @@
 # Language-agnostic — works for any repo (python, node, helm, etc.)
 # whose release tooling parses PR titles (e.g. release-please).
 #
-# Must be called from a `pull_request`/`pull_request_target` event — the
-# underlying action and the bot-skip guard need the PR context.
+# Call it from a `pull_request` event — the underlying action and the
+# bot-skip guard need the PR context. Do not use `pull_request_target`:
+# GitHub blocks that event on public repositories by default
+# (https://gh.io/securely-using-pull_request_target), and this check needs
+# no write access or secrets. The job only reads the PR, so it behaves the
+# same for same-repo, Dependabot and fork PRs (their tokens are read-only).
+# Failures are explained in the job summary and an error annotation rather
+# than a PR comment, which would need `pull-requests: write`.
 #
 # Caller example:
 #
 #   name: pr-title-lint
 #   on:
-#     pull_request_target:
+#     pull_request:
 #       types: [opened, edited, reopened, synchronize]
 #       branches: [main]
 #   permissions:
 #     contents: read
-#     pull-requests: write
+#     pull-requests: read
 #   jobs:
 #     lint:
 #       uses: bcit-tlu/.github/.github/workflows/pr-title-lint.yaml@main
 #       permissions:
 #         contents: read
-#         pull-requests: write
-#       secrets: inherit
+#         pull-requests: read
 
 name: PR title lint
 
@@ -73,7 +78,7 @@ jobs:
     if: github.event.pull_request.user.type != 'Bot'
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
     steps:
       # Validate the PR title against the allowed Conventional Commit types
       # and subject pattern. Fails the job on a non-conforming title.
@@ -87,43 +92,43 @@ jobs:
           subjectPattern: ${{ inputs.subject_pattern }}
           subjectPatternError: ${{ inputs.subject_pattern_error }}
 
-      # On failure, post/update a sticky comment explaining the required
-      # format so contributors can fix the title without digging through docs.
-      # continue-on-error: fork PRs on a plain `pull_request` trigger get a
-      # read-only token, so commenting can fail — keep the lint verdict as
-      # the signal rather than adding a second error on top.
-      - name: Post failure explainer comment
+      # On failure, explain the required format in the job summary (linked
+      # from the failed check) so contributors can fix the title without
+      # digging through docs. The action's error message is untrusted (it
+      # echoes the PR title), so it is only ever written to the summary file,
+      # never to stdout where it could be parsed as a workflow command.
+      - name: Explain failure
         if: failure() && steps.lint.outcome == 'failure'
-        continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
-        with:
-          header: pr-title-lint
-          message: |
-            ## PR title must follow Conventional Commits
+        env:
+          LINT_ERROR: ${{ steps.lint.outputs.error_message }}
+        run: |
+          {
+            cat <<'MD'
+          ## PR title must follow Conventional Commits
 
-            release-please uses PR titles on `main` to determine version bumps and changelog entries.
+          release-please uses PR titles on `main` to determine version bumps and changelog entries.
 
-            ```
-            <type>[optional scope][!]: <subject>
-            ```
+          ~~~text
+          MD
+            printf '%s\n' "$LINT_ERROR"
+            cat <<'MD'
+          ~~~
 
-            - `type`: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
-            - `subject`: start lowercase, imperative mood, no trailing period
-            - breaking change: add `!` (or `BREAKING CHANGE:` in body)
+          ```
+          <type>[optional scope][!]: <subject>
+          ```
 
-            Examples:
-            - ✅ `feat: add search page`
-            - ✅ `fix: correct broken nav link`
-            - ❌ `Add search page`
-            - ❌ `feat: Add search page`
+          - `type`: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
+          - `subject`: start lowercase, imperative mood, no trailing period
+          - breaking change: add `!` (or `BREAKING CHANGE:` in body)
 
-            Edit the PR title in GitHub; this check reruns automatically.
+          Examples:
+          - ✅ `feat: add search page`
+          - ✅ `fix: correct broken nav link`
+          - ❌ `Add search page`
+          - ❌ `feat: Add search page`
 
-      # Once the title passes, remove the sticky failure comment.
-      - name: Clear failure explainer on success
-        if: success() && steps.lint.outcome == 'success'
-        continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v3
-        with:
-          header: pr-title-lint
-          delete: true
+          Edit the PR title in GitHub; this check reruns automatically.
+          MD
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error title=PR title must follow Conventional Commits::Edit the PR title to match <type>[optional scope][!]: <subject>. See this run's summary for the reason and examples."
