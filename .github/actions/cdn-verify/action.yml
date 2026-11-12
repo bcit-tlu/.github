@@ -10,6 +10,10 @@ inputs:
     description: "Comma-separated list of asset extensions to check."
     required: false
     default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,woff,woff2,ttf,otf,eot"
+  asset_names:
+    description: "Comma-separated basenames of published extensionless files (e.g. robots,LICENSE) — refs ending in these as a full path segment are checked too."
+    required: false
+    default: ""
   dist_dir:
     description: "Directory containing the built static assets."
     required: false
@@ -24,4 +28,5 @@ runs:
       env:
         CDN_BASE_URL: ${{ inputs.cdn_base_url }}
         ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+        ASSET_NAMES: ${{ inputs.asset_names }}
         DIST_DIR: ${{ inputs.dist_dir }}

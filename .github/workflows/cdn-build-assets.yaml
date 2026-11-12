@@ -33,10 +33,20 @@ on:
         type: string
         default: ""
       asset_extensions:
-        description: "Comma-separated list of file extensions that get uploaded to the CDN. The content hash covers exactly this set — files outside it never reach the CDN and don't affect the ref."
+        description: "Comma-separated list of file extensions that get uploaded to the CDN. The content hash covers exactly the union of this set, asset_dirs, and asset_files — files outside it never reach the CDN and don't affect the ref. May be empty when dirs/files cover the set."
         required: false
         type: string
         default: "css,js,map,jpg,jpeg,png,webp,gif,svg,ico,mp4,webm,mp3,ogg,woff,woff2,ttf,otf,eot"
+      asset_dirs:
+        description: "Comma-separated list of dist/ subdirectories to upload wholesale — every file under them regardless of type (e.g. 'css,js,assets'). Unioned with asset_extensions and asset_files; entries must exist under dist_dir."
+        required: false
+        type: string
+        default: ""
+      asset_files:
+        description: "Comma-separated list of individual files to upload by dist-relative path (e.g. 'favicon.ico,site.webmanifest'). Unioned with asset_extensions and asset_dirs; entries must exist under dist_dir."
+        required: false
+        type: string
+        default: ""
       node_version:
         description: "Node.js version for the build."
         required: false
@@ -55,6 +65,12 @@ on:
       asset_extensions:
         description: "Resolved extension filter; pass to cdn-upload's asset_extensions so the hash and upload filters can never drift."
         value: ${{ jobs.build.outputs.asset_extensions }}
+      asset_dirs:
+        description: "Resolved directory filter; pass to cdn-upload's asset_dirs so the hash and upload filters can never drift."
+        value: ${{ jobs.build.outputs.asset_dirs }}
+      asset_files:
+        description: "Resolved file list; pass to cdn-upload's asset_files so the hash and upload filters can never drift."
+        value: ${{ jobs.build.outputs.asset_files }}
 
 jobs:
   build:
@@ -66,6 +82,8 @@ jobs:
       content_hash: ${{ steps.content-hash.outputs.content_hash }}
       destination_prefix: ${{ steps.content-hash.outputs.content_hash }}
       asset_extensions: ${{ steps.set-sha.outputs.asset_extensions }}
+      asset_dirs: ${{ steps.set-sha.outputs.asset_dirs }}
+      asset_files: ${{ steps.set-sha.outputs.asset_files }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -94,8 +112,12 @@ jobs:
         run: |
           echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "asset_extensions=${ASSET_EXTENSIONS}" >> "$GITHUB_OUTPUT"
+          echo "asset_dirs=${ASSET_DIRS}" >> "$GITHUB_OUTPUT"
+          echo "asset_files=${ASSET_FILES}" >> "$GITHUB_OUTPUT"
         env:
           ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+          ASSET_DIRS: ${{ inputs.asset_dirs }}
+          ASSET_FILES: ${{ inputs.asset_files }}
 
       # Content-addressed prefix: hash the (path, bytes) pairs of exactly the file set cdn-upload publishes.
       # Identical asset content → identical ref, so promotion to stable is a server-side blob copy with no rebuild.
@@ -103,6 +125,8 @@ jobs:
         id: content-hash
         env:
           ASSET_EXTENSIONS: ${{ inputs.asset_extensions }}
+          ASSET_DIRS: ${{ inputs.asset_dirs }}
+          ASSET_FILES: ${{ inputs.asset_files }}
           DIST_DIR: ${{ inputs.dist_dir }}
         run: |
           set -euo pipefail
@@ -116,6 +140,13 @@ jobs:
             exit 1
           fi
 
+          # The hashed file set is the union of three selectors — extension
+          # globs, whole directories, explicit relpaths. cdn-upload resolves
+          # the identical set from these same inputs, so ref↔bytes can never
+          # drift.
+          files_list=$(mktemp)
+          : > "$files_list"
+
           pred=()
           IFS=',' read -ra exts <<< "${ASSET_EXTENSIONS}"
           for ext in "${exts[@]}"; do
@@ -123,20 +154,74 @@ jobs:
             [ -z "${ext_trim}" ] && continue
             pred+=(-o -name "*.${ext_trim}")
           done
-          if [ ${#pred[@]} -eq 0 ]; then
-            echo "::error::asset_extensions resolved to an empty set"
-            exit 1
+          if [ ${#pred[@]} -gt 0 ]; then
+            (cd "${DIST_DIR}" && find . -type f \( "${pred[@]:1}" \) -print0) >> "$files_list"
           fi
 
+          # path_re via var: a space in the class word-splits on the =~ RHS
+          path_re='[^a-zA-Z0-9/_.% -]'
+          IFS=',' read -ra dirs <<< "${ASSET_DIRS}"
+          for d in "${dirs[@]}"; do
+            # Normalize: strip leading ./ and trailing /, collapse /./ and // — the
+            # same spelling must resolve to the same hashed path and blob name.
+            d_trim="$(printf '%s' "$d" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
+            [ -z "${d_trim}" ] && continue
+            if [[ "${d_trim}" =~ ${path_re} ]] || [[ "${d_trim}" =~ (^|/)\.\.(/|$) ]]; then
+              echo "::error::asset_dirs entry '${d_trim}' is not a safe relative path"
+              exit 1
+            fi
+            if [ ! -d "${DIST_DIR}/${d_trim}" ]; then
+              echo "::error::asset_dirs entry '${d_trim}' does not exist under ${DIST_DIR}"
+              exit 1
+            fi
+            if [ -L "${DIST_DIR}/${d_trim}" ] || find "${DIST_DIR}/${d_trim}" -type l -print -quit | grep -q .; then
+              echo "::error::asset_dirs entry '${d_trim}' is or contains symlinks — uploads would follow them outside dist/"
+              exit 1
+            fi
+            (cd "${DIST_DIR}" && find "./${d_trim}" -type f -print0) >> "$files_list"
+          done
+
+          IFS=',' read -ra fls <<< "${ASSET_FILES}"
+          for f in "${fls[@]}"; do
+            f_trim="$(printf '%s' "$f" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s|^\.\?/||; s|/\./|/|g; s|/\+|/|g; s|/$||')"
+            [ -z "${f_trim}" ] && continue
+            if [[ "${f_trim}" =~ ${path_re} ]] || [[ "${f_trim}" =~ (^|/)\.\.(/|$) ]]; then
+              echo "::error::asset_files entry '${f_trim}' is not a safe relative path"
+              exit 1
+            fi
+            if [ ! -f "${DIST_DIR}/${f_trim}" ]; then
+              echo "::error::asset_files entry '${f_trim}' not found under ${DIST_DIR}"
+              exit 1
+            fi
+            if [ -L "${DIST_DIR}/${f_trim}" ]; then
+              echo "::error::asset_files entry '${f_trim}' is a symlink — uploads would follow it outside dist/"
+              exit 1
+            fi
+            printf './%s\0' "${f_trim}" >> "$files_list"
+          done
+
           # Hash "sha256  relpath" lines; paths are relative so the hash is independent of the dist directory's own name.
-          mapfile -d '' files < <(cd "${DIST_DIR}" && find . -type f \( "${pred[@]:1}" \) -print0 | sort -z)
+          mapfile -d '' files < <(sort -z -u "$files_list")
+          rm -f "$files_list"
           if [ ${#files[@]} -eq 0 ]; then
-            echo "::error::No files in ${DIST_DIR} match asset_extensions (${ASSET_EXTENSIONS}) — an empty upload would produce a ref pointing at nothing."
+            echo "::error::No files in ${DIST_DIR} matched asset_dirs/asset_files/asset_extensions — an empty upload would produce a ref pointing at nothing."
             exit 1
           fi
           content_hash=$(cd "${DIST_DIR}" && printf '%s\0' "${files[@]}" | xargs -0 sha256sum | sha256sum | cut -c1-12)
           echo "content_hash=${content_hash}" >> "$GITHUB_OUTPUT"
-          echo "Content hash (${DIST_DIR}, ${#files[@]} files matching ${ASSET_EXTENSIONS}): ${content_hash}"
+          echo "Content hash (${DIST_DIR}, ${#files[@]} files): ${content_hash}"
+
+          # Extensions actually present in the hashed set — cdn-verify uses this
+          # so its ref detection covers every published type (e.g. a .webmanifest
+          # pulled in via asset_files), not just the caller's extension list.
+          verify_exts=$(printf '%s\n' "${files[@]}" | sed -n 's|.*\.\([a-zA-Z0-9]\+\)$|\1|p' | sort -u | tr '\n' ',' | sed 's/,$//')
+          echo "verify_extensions=${verify_exts}" >> "$GITHUB_OUTPUT"
+          # Basenames of published extensionless files (robots, LICENSE...) —
+          # refs ending in these are checked as full path segments.
+          # sed basename (not xargs — it splits on spaces). Emit each name
+          # twice: raw plus percent-encoded, since refs may write either form.
+          verify_names=$(printf '%s\n' "${files[@]}" | sed 's|.*/||' | { grep -v '\.' || true; } | sed 'p;s/%/%25/g;s/ /%20/g' | sort -u | tr '\n' ',' | sed 's/,$//')
+          echo "verify_names=${verify_names}" >> "$GITHUB_OUTPUT"
 
       # Load shared actions at the ref the caller pinned this workflow to (uses: rejects expressions, so `uses: .../cdn-verify@main` would silently track main even for tagged/SHA-pinned callers).
       - name: Check out shared actions at the pinned workflow ref
@@ -148,14 +233,22 @@ jobs:
           persist-credentials: false
 
       # Gate: fail the build if dist/ still contains refs that only resolve on the origin host (root-absolute paths, ../ escaping the prefix) or any baked channel hostname — either would break byte-identical promotion.
+      # cdn-verify's extension list is a reference detector for refs that
+      # resolve to CDN-published files — derived from the hashed set above so
+      # it covers every published type whatever selector produced it.
       - name: Verify dist is host-agnostic
         uses: ./.github-workflow/.github/actions/cdn-verify
         with:
           cdn_base_url: ${{ inputs.cdn_base_url }}
-          asset_extensions: ${{ inputs.asset_extensions }}
+          asset_extensions: ${{ steps.content-hash.outputs.verify_extensions }}
+          asset_names: ${{ steps.content-hash.outputs.verify_names }}
           dist_dir: ${{ inputs.dist_dir }}
 
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ inputs.dist_dir }}/
+          # Hidden files are part of the hashed/uploaded set (find -type f
+          # sees them) — without this, e.g. a .well-known dir selected via
+          # asset_dirs hashes fine but vanishes before the upload job runs.
+          include-hidden-files: true
